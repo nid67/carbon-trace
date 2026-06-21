@@ -1234,6 +1234,10 @@
         assert(insights.length >= 2, "Insights generated accurately for high values");
         assert(insights.find(i => i.title.includes('Beef')) !== undefined, "Beef insight present");
         
+        // Additional Edge Cases
+        assert(DataValidator.validateActivityInput({category:'shopping', subcategory:'electronics', value:'0'}).valid === true, "Zero value is valid");
+        assert(EmissionsCalculator.calculateEmissions('shopping', 'furniture', 2) === 90, "2 furniture items = 90kg");
+        
         // Reset state
         AppState._setEntriesForTest([]);
         
