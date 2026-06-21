@@ -217,6 +217,17 @@
         height: auto;
         border-right: none;
         border-bottom: 1px solid rgba(0,0,0,0.05);
+        flex-direction: row;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 12px;
+      }
+      .brand {
+        margin-bottom: 0;
+        margin-right: 16px;
+      }
+      .connection-badge {
+        margin-bottom: 0;
       }
     }
 
@@ -1675,6 +1686,20 @@
         updateDashboard();
         renderLogTable();
         renderInsights();
+        
+        // Hide DB Settings & Connection Indicator unless ?admin=true is present in the URL
+        const urlParams = new URLSearchParams(window.location.search);
+        const isAdmin = urlParams.get('admin') === 'true';
+        const settingsBtn = document.querySelector('[data-target="settings"]');
+        const statusBadge = document.getElementById('connection-status-badge');
+        
+        if (settingsBtn) {
+          settingsBtn.style.display = isAdmin ? 'flex' : 'none';
+        }
+        if (statusBadge) {
+          statusBadge.style.display = isAdmin ? 'inline-flex' : 'none';
+        }
+        
         updateConnectionBadge();
       }
 
