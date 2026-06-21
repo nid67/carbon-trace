@@ -34,12 +34,13 @@ Then navigate to `http://localhost:8080`.
 
 The JavaScript codebase follows the **Module Revealing Pattern** to ensure strict namespace separation, security, and maintainability.
 
-*   **`AppState`**: Manages the application's central state, performs localStorage persistence for logging history, and handles seeding of initial 7-day demo data.
+*   **`AppState`**: Manages the application's central state, handles Supabase cloud synchronization (if configured), and performs fallback localStorage persistence for logging history.
 *   **`EmissionsCalculator`**: Pure mathematical functions with robust JSDoc descriptions for calculating CO₂ emissions based on activity values and predefined factors.
 *   **`ChartRenderer`**: Draws stacked bar charts and category doughnut charts dynamically using native HTML5 Canvas. Includes responsive support and high DPI scaling handles for razor-sharp visualization on Retina displays.
 *   **`UIController`**: Manages DOM manipulation, handles view switches, debounces inputs (300ms), and coordinates pagination for log tables.
 *   **`InsightsEngine`**: Analyzes state trends and yields actionable, ranked recommendations based on users' high-emission categories.
 *   **`DataValidator`**: Sanitizes inputs (XSS protection) and enforces strict validation boundaries (e.g., negative boundary checks, maximum value limits).
+*   **`TestRunner`**: Executes automated unit tests on page load and updates the UI with a system health status pill.
 
 ---
 

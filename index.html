@@ -1124,6 +1124,7 @@
         const cx = width / 2;
         const cy = height / 2;
         const radius = Math.min(cx, cy) - 20;
+        if (radius <= 0) return;
         const innerRadius = radius * 0.6;
 
         if (totalCO2 === 0) {
