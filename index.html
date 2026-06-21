@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>CarbonTrace - Personal Carbon Footprint Tracker</title>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
     :root {
       --primary: #2D6A4F;
@@ -68,11 +69,39 @@
       font-size: 24px;
       font-weight: 600;
       color: var(--primary);
-      margin-bottom: 30px;
+      margin-bottom: 5px;
       display: flex;
       align-items: center;
       gap: 10px;
     }
+
+    .connection-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 4px 8px;
+      border-radius: 20px;
+      margin-bottom: 24px;
+      width: fit-content;
+    }
+    .badge-cloud {
+      background-color: rgba(82, 183, 136, 0.15);
+      color: var(--primary);
+    }
+    .badge-local {
+      background-color: rgba(233, 196, 106, 0.15);
+      color: #9A6F00;
+    }
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+    .status-dot-green { background-color: var(--primary); }
+    .status-dot-orange { background-color: #DDA15E; }
 
     .nav-btn {
       background: none;
@@ -358,6 +387,9 @@
         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
         CarbonTrace
       </div>
+      <div id="connection-status-badge" class="connection-badge badge-local">
+        <span class="status-dot status-dot-orange"></span> Local Storage
+      </div>
       <button class="nav-btn active" data-target="dashboard" aria-label="Dashboard">
         📊 Dashboard
       </button>
@@ -369,6 +401,9 @@
       </button>
       <button class="nav-btn" data-target="learn" aria-label="Learn">
         📚 Learn
+      </button>
+      <button class="nav-btn" data-target="settings" aria-label="Database Settings">
+        ⚙️ DB Settings
       </button>
     </aside>
 
@@ -523,6 +558,40 @@
           </div>
         </div>
       </section>
+
+      <!-- Settings View -->
+      <section id="settings" class="view">
+        <h1>Database Settings</h1>
+        <div class="card">
+          <h2>Supabase Cloud Database</h2>
+          <p style="color: var(--text-secondary); margin-bottom: 16px;">
+            Synchronize your footprint tracker data directly to a hosted PostgreSQL instance on Supabase.
+          </p>
+          <form id="db-settings-form">
+            <div class="form-group">
+              <label for="supabase-url">Supabase Project URL</label>
+              <input type="url" id="supabase-url" placeholder="https://your-project.supabase.co" required>
+            </div>
+            <div class="form-group">
+              <label for="supabase-key">Supabase Anon Key</label>
+              <input type="password" id="supabase-key" placeholder="your-public-anon-key" required>
+            </div>
+            <div style="display: flex; gap: 12px; align-items: center; margin-top: 20px;">
+              <button type="submit" class="btn-primary">Connect DB</button>
+              <button type="button" id="btn-disconnect" class="btn-primary" style="background-color: var(--danger); display: none;">Disconnect</button>
+            </div>
+          </form>
+          <p id="settings-status-msg" style="margin-top: 16px; font-weight: 500; display: none;"></p>
+        </div>
+
+        <div class="card" id="sync-card" style="display: none;">
+          <h2>Sync Offline Data</h2>
+          <p style="color: var(--text-secondary); margin-bottom: 16px;">
+            You have entries currently stored in your browser's Local Storage. Sync them to push them to the cloud database.
+          </p>
+          <button id="btn-sync-data" class="btn-primary" style="background-color: var(--secondary);">Sync Data to Cloud</button>
+        </div>
+      </section>
     </main>
   </div>
 
@@ -531,7 +600,7 @@
      * TESTABLE UNITS:
      * - EmissionsCalculator.calculateTransportEmissions(mode, km) → number
      * - EmissionsCalculator.calculateFoodEmissions(item, kg) → number
-     * - AppState.addEntry(entry) → void, persists to localStorage
+     * - AppState.addEntry(entry) → void, persists to localStorage / Supabase
      * - AppState.getEntriesByDateRange(start, end) → Entry[]
      * - InsightsEngine.generateInsights(entries) → Insight[]
      * - DataValidator.validateActivityInput(formData) → {valid: boolean, errors: string[]}
@@ -638,6 +707,7 @@
     const AppState = (function() {
       let entries = [];
       let adoptedInsights = [];
+      let supabase = null;
 
       /**
        * Generates a UUID v4
@@ -673,6 +743,130 @@
           populateSampleData();
           localStorage.setItem('carbontrace_initialized', 'true');
         }
+
+        // Auto-connect Supabase if settings exist
+        const sbUrl = localStorage.getItem('carbontrace_sb_url');
+        const sbKey = localStorage.getItem('carbontrace_sb_key');
+        if (sbUrl && sbKey) {
+          connectSupabase(sbUrl, sbKey).catch(err => {
+            console.error("Auto-connect to Supabase failed:", err);
+          });
+        }
+      }
+
+      /**
+       * Connects to Supabase client
+       * @param {string} url 
+       * @param {string} key 
+       */
+      async function connectSupabase(url, key) {
+        try {
+          if (!window.supabase) {
+            throw new Error("Supabase SDK not loaded yet.");
+          }
+          const client = window.supabase.createClient(url, key);
+          
+          // Test query
+          const { error } = await client.from('carbontrace_entries').select('*').limit(1);
+          if (error) throw error;
+          
+          supabase = client;
+          localStorage.setItem('carbontrace_sb_url', url);
+          localStorage.setItem('carbontrace_sb_key', key);
+          
+          await pullCloudData();
+          return true;
+        } catch (err) {
+          supabase = null;
+          throw err;
+        }
+      }
+
+      /**
+       * Disconnects Supabase and restores local entries
+       */
+      function disconnectSupabase() {
+        supabase = null;
+        localStorage.removeItem('carbontrace_sb_url');
+        localStorage.removeItem('carbontrace_sb_key');
+        
+        // Reload local copy
+        const stored = localStorage.getItem('carbontrace_entries');
+        entries = stored ? JSON.parse(stored) : [];
+        const storedInsights = localStorage.getItem('carbontrace_adopted_insights');
+        adoptedInsights = storedInsights ? JSON.parse(storedInsights) : [];
+        
+        document.dispatchEvent(new Event('stateChanged'));
+      }
+
+      /**
+       * Fetches latest data from Supabase
+       */
+      async function pullCloudData() {
+        if (!supabase) return;
+        const { data: entriesData, error: entriesError } = await supabase
+          .from('carbontrace_entries')
+          .select('*')
+          .order('timestamp', { ascending: false });
+        
+        if (entriesError) throw entriesError;
+        entries = entriesData || [];
+
+        const { data: insightsData, error: insightsError } = await supabase
+          .from('carbontrace_adopted_insights')
+          .select('*');
+
+        if (insightsError) throw insightsError;
+        adoptedInsights = (insightsData || []).map(row => ({
+          id: row.id,
+          co2Saved: parseFloat(row.co2_saved),
+          date: row.created_at
+        }));
+
+        document.dispatchEvent(new Event('stateChanged'));
+      }
+
+      /**
+       * Syncs entries currently inside localstorage up to Supabase
+       */
+      async function syncLocalToCloud() {
+        if (!supabase) return;
+        
+        const storedLocal = localStorage.getItem('carbontrace_entries');
+        if (storedLocal) {
+          const localEntries = JSON.parse(storedLocal);
+          if (localEntries.length > 0) {
+            const formatted = localEntries.map(e => ({
+              id: e.id,
+              timestamp: e.timestamp,
+              category: e.category,
+              subcategory: e.subcategory,
+              value: e.value,
+              co2_kg: e.co2_kg
+            }));
+            const { error } = await supabase.from('carbontrace_entries').insert(formatted);
+            if (error) throw error;
+          }
+        }
+
+        const storedInsights = localStorage.getItem('carbontrace_adopted_insights');
+        if (storedInsights) {
+          const localInsights = JSON.parse(storedInsights);
+          if (localInsights.length > 0) {
+            const formatted = localInsights.map(i => ({
+              id: i.id,
+              co2_saved: i.co2Saved
+            }));
+            const { error } = await supabase.from('carbontrace_adopted_insights').insert(formatted);
+            if (error) throw error;
+          }
+        }
+
+        // Clean out LocalStorage copies to avoid multi-sync prompts
+        localStorage.removeItem('carbontrace_entries');
+        localStorage.removeItem('carbontrace_adopted_insights');
+
+        await pullCloudData();
       }
 
       /**
@@ -704,31 +898,25 @@
         samples.forEach(s => {
           const d = new Date(now);
           d.setDate(d.getDate() - (s.daysAgo || 0));
-          addEntry({
+          const co2_kg = EmissionsCalculator.calculateEmissions(s.c, s.s, s.v);
+          entries.push({
+            id: generateUUID(),
+            timestamp: d.toISOString(),
             category: s.c,
             subcategory: s.s,
             value: s.v,
-            timestamp: d.toISOString()
-          }, false);
+            co2_kg: co2_kg
+          });
         });
-        save();
-      }
-
-      /**
-       * Saves entries to localStorage
-       */
-      function save() {
+        entries.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
         localStorage.setItem('carbontrace_entries', JSON.stringify(entries));
-        localStorage.setItem('carbontrace_adopted_insights', JSON.stringify(adoptedInsights));
-        document.dispatchEvent(new Event('stateChanged'));
       }
 
       /**
        * Adds a new entry
        * @param {Object} data 
-       * @param {boolean} shouldSave 
        */
-      function addEntry(data, shouldSave = true) {
+      async function addEntry(data) {
         const co2_kg = EmissionsCalculator.calculateEmissions(data.category, data.subcategory, data.value);
         const entry = {
           id: generateUUID(),
@@ -738,18 +926,55 @@
           value: parseFloat(data.value),
           co2_kg: co2_kg
         };
+
+        if (supabase) {
+          const { error } = await supabase
+            .from('carbontrace_entries')
+            .insert([{
+              id: entry.id,
+              timestamp: entry.timestamp,
+              category: entry.category,
+              subcategory: entry.subcategory,
+              value: entry.value,
+              co2_kg: entry.co2_kg
+            }]);
+          if (error) {
+            alert("Database insert error: " + error.message);
+            return;
+          }
+        }
+
         entries.push(entry);
         entries.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-        if (shouldSave) save();
+        
+        if (!supabase) {
+          localStorage.setItem('carbontrace_entries', JSON.stringify(entries));
+        }
+        document.dispatchEvent(new Event('stateChanged'));
       }
 
       /**
        * Deletes an entry by ID
        * @param {string} id 
        */
-      function deleteEntry(id) {
+      async function deleteEntry(id) {
+        if (supabase) {
+          const { error } = await supabase
+            .from('carbontrace_entries')
+            .delete()
+            .eq('id', id);
+          if (error) {
+            alert("Database delete error: " + error.message);
+            return;
+          }
+        }
+        
         entries = entries.filter(e => e.id !== id);
-        save();
+        
+        if (!supabase) {
+          localStorage.setItem('carbontrace_entries', JSON.stringify(entries));
+        }
+        document.dispatchEvent(new Event('stateChanged'));
       }
 
       /**
@@ -778,10 +1003,29 @@
        * @param {string} insightId 
        * @param {number} co2Saved 
        */
-      function markInsightAdopted(insightId, co2Saved) {
+      async function markInsightAdopted(insightId, co2Saved) {
         if (!adoptedInsights.find(i => i.id === insightId)) {
-          adoptedInsights.push({ id: insightId, co2Saved, date: new Date().toISOString() });
-          save();
+          const adopted = { id: insightId, co2Saved, date: new Date().toISOString() };
+          
+          if (supabase) {
+            const { error } = await supabase
+              .from('carbontrace_adopted_insights')
+              .insert([{
+                id: insightId,
+                co2_saved: co2Saved
+              }]);
+            if (error) {
+              alert("Database insert error: " + error.message);
+              return;
+            }
+          }
+          
+          adoptedInsights.push(adopted);
+          
+          if (!supabase) {
+            localStorage.setItem('carbontrace_adopted_insights', JSON.stringify(adoptedInsights));
+          }
+          document.dispatchEvent(new Event('stateChanged'));
         }
       }
       
@@ -793,7 +1037,27 @@
         return adoptedInsights;
       }
 
-      return { init, getEntries, getEntriesByDateRange, addEntry, deleteEntry, markInsightAdopted, getAdoptedInsights };
+      /**
+       * Checks if Supabase client is connected
+       * @returns {boolean}
+       */
+      function isCloudConnected() {
+        return !!supabase;
+      }
+
+      return {
+        init,
+        getEntries,
+        getEntriesByDateRange,
+        addEntry,
+        deleteEntry,
+        markInsightAdopted,
+        getAdoptedInsights,
+        connectSupabase,
+        disconnectSupabase,
+        syncLocalToCloud,
+        isCloudConnected
+      };
     })();
 
     // --- 4. ChartRenderer ---
@@ -1066,7 +1330,17 @@
           
           insightsContainer: document.getElementById('insights-container'),
           impactSummary: document.getElementById('impact-summary'),
-          progressFill: document.getElementById('progress-fill')
+          progressFill: document.getElementById('progress-fill'),
+
+          // Database Settings DOM elements
+          settingsForm: document.getElementById('db-settings-form'),
+          supabaseUrl: document.getElementById('supabase-url'),
+          supabaseKey: document.getElementById('supabase-key'),
+          settingsStatusMsg: document.getElementById('settings-status-msg'),
+          btnDisconnect: document.getElementById('btn-disconnect'),
+          connectionBadge: document.getElementById('connection-status-badge'),
+          syncCard: document.getElementById('sync-card'),
+          btnSyncData: document.getElementById('btn-sync-data')
         };
       }
 
@@ -1080,6 +1354,10 @@
             switchView(targetId);
             if (targetId === 'dashboard') {
                updateDashboard();
+            }
+            if (targetId === 'settings') {
+               updateConnectionBadge();
+               checkLocalDataToSync();
             }
           });
         });
@@ -1097,11 +1375,10 @@
               subcategory: DOM.subcategorySelect.value,
               value: e.target.value
             };
-            // Input logic/validation preview could go here
           }, 300);
         });
 
-        DOM.logForm.addEventListener('submit', (e) => {
+        DOM.logForm.addEventListener('submit', async (e) => {
           e.preventDefault();
           
           const formData = {
@@ -1112,12 +1389,57 @@
 
           const validation = DataValidator.validateActivityInput(formData);
           if (validation.valid) {
-            AppState.addEntry(formData);
+            await AppState.addEntry(formData);
             DOM.logForm.reset();
             updateSubcategories(DOM.categorySelect.value);
             logPage = 0; // Reset to first page
           } else {
             alert("Error: " + validation.errors.join(", "));
+          }
+        });
+
+        DOM.settingsForm.addEventListener('submit', async (e) => {
+          e.preventDefault();
+          const url = DOM.supabaseUrl.value.trim();
+          const key = DOM.supabaseKey.value.trim();
+          
+          DOM.settingsStatusMsg.style.display = 'block';
+          DOM.settingsStatusMsg.textContent = 'Connecting...';
+          DOM.settingsStatusMsg.style.color = 'var(--text-primary)';
+
+          try {
+            await AppState.connectSupabase(url, key);
+            DOM.settingsStatusMsg.textContent = 'Connected successfully!';
+            DOM.settingsStatusMsg.style.color = 'var(--primary)';
+            updateConnectionBadge();
+            checkLocalDataToSync();
+          } catch (err) {
+            DOM.settingsStatusMsg.textContent = 'Connection failed: ' + err.message;
+            DOM.settingsStatusMsg.style.color = 'var(--danger)';
+            updateConnectionBadge();
+          }
+        });
+
+        DOM.btnDisconnect.addEventListener('click', () => {
+          AppState.disconnectSupabase();
+          DOM.settingsForm.reset();
+          DOM.settingsStatusMsg.style.display = 'none';
+          updateConnectionBadge();
+          DOM.syncCard.style.display = 'none';
+        });
+
+        DOM.btnSyncData.addEventListener('click', async () => {
+          try {
+            DOM.btnSyncData.textContent = 'Syncing...';
+            DOM.btnSyncData.disabled = true;
+            await AppState.syncLocalToCloud();
+            alert("Data successfully synchronized with Supabase!");
+            DOM.syncCard.style.display = 'none';
+          } catch (err) {
+            alert("Sync failed: " + err.message);
+          } finally {
+            DOM.btnSyncData.textContent = 'Sync Data to Cloud';
+            DOM.btnSyncData.disabled = false;
           }
         });
 
@@ -1147,6 +1469,38 @@
              ChartRenderer.renderCharts(AppState.getEntries());
            }
         });
+      }
+
+      /**
+       * Updates the visual connection badge in the UI
+       */
+      function updateConnectionBadge() {
+        if (AppState.isCloudConnected()) {
+          DOM.connectionBadge.className = 'connection-badge badge-cloud';
+          DOM.connectionBadge.innerHTML = '<span class="status-dot status-dot-green"></span> Cloud Connected';
+          DOM.btnDisconnect.style.display = 'block';
+          DOM.supabaseUrl.value = localStorage.getItem('carbontrace_sb_url') || '';
+          DOM.supabaseKey.value = localStorage.getItem('carbontrace_sb_key') || '';
+        } else {
+          DOM.connectionBadge.className = 'connection-badge badge-local';
+          DOM.connectionBadge.innerHTML = '<span class="status-dot status-dot-orange"></span> Local Storage';
+          DOM.btnDisconnect.style.display = 'none';
+        }
+      }
+
+      /**
+       * Checks if there is local data that can be synced
+       */
+      function checkLocalDataToSync() {
+        const storedLocal = localStorage.getItem('carbontrace_entries');
+        if (AppState.isCloudConnected() && storedLocal) {
+          const localEntries = JSON.parse(storedLocal);
+          if (localEntries.length > 0) {
+            DOM.syncCard.style.display = 'block';
+            return;
+          }
+        }
+        DOM.syncCard.style.display = 'none';
       }
 
       /**
@@ -1248,13 +1602,12 @@
 
         // Bind delete buttons
         document.querySelectorAll('.btn-delete').forEach(btn => {
-          btn.addEventListener('click', (e) => {
+          btn.addEventListener('click', async (e) => {
             const id = e.target.dataset.id;
-            AppState.deleteEntry(id);
-            // Adjust pagination if page becomes empty
+            await AppState.deleteEntry(id);
             const totalPages = Math.ceil(AppState.getEntries().length / PAGE_SIZE) || 1;
             if (logPage >= totalPages) logPage = Math.max(0, totalPages - 1);
-            renderLogTable(); // re-render to update
+            renderLogTable();
           });
         });
 
@@ -1291,10 +1644,10 @@
           });
 
           document.querySelectorAll('.btn-adopt').forEach(btn => {
-            btn.addEventListener('click', (e) => {
+            btn.addEventListener('click', async (e) => {
               const id = e.target.dataset.id;
               const savings = parseFloat(e.target.dataset.savings);
-              AppState.markInsightAdopted(id, savings);
+              await AppState.markInsightAdopted(id, savings);
               renderInsights();
             });
           });
@@ -1322,6 +1675,7 @@
         updateDashboard();
         renderLogTable();
         renderInsights();
+        updateConnectionBadge();
       }
 
       return { init };
