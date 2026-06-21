@@ -1,0 +1,813 @@
+(function() {
+  "use strict";
+
+  /**
+   * TESTABLE UNITS:
+   * - DataValidator.validateActivityInput(formData)
+   * - EmissionsCalculator.calculateTransportEmissions(mode, km)
+   * - EmissionsCalculator.calculateFoodEmissions(item, kg)
+   * - AppState CRUD operations
+   * - InsightsEngine calculations
+   */
+
+  // --- CONFIGURATION & CONSTANTS ---
+  const SUPABASE_URL = "";
+  const SUPABASE_KEY = "";
+
+  /**
+   * @constant {Object} EMISSION_FACTORS
+   * @description Immutable mapping of categories to specific subcategory emission multipliers (kg CO2 per unit).
+   */
+  const EMISSION_FACTORS = Object.freeze({
+    transport: Object.freeze({ car: 0.21, bus: 0.089, train: 0.041, flight: 0.255, bike: 0, walk: 0 }),
+    food: Object.freeze({ beef: 27, chicken: 6.9, fish: 5.1, vegetables: 2.0, dairy: 3.2 }),
+    energy: Object.freeze({ electricity: 0.233, gas: 0.184, heating: 0.25 }),
+    shopping: Object.freeze({ electronics: 70, clothing: 15, furniture: 45 })
+  });
+
+  /**
+   * @constant {Object} CATEGORY_COLORS
+   * @description Immutable mapping of categories to their designated hex color codes.
+   */
+  const CATEGORY_COLORS = Object.freeze({
+    transport: '#2D6A4F',
+    food: '#E9C46A',
+    energy: '#C1292E',
+    shopping: '#52B788'
+  });
+
+  /**
+   * @class ValidationError
+   * @extends Error
+   * @description Custom error class for handling specific activity validation failures.
+   */
+  class ValidationError extends Error {
+    /**
+     * @param {string} message - The error description
+     */
+    constructor(message) {
+      super(message);
+      this.name = "ValidationError";
+    }
+  }
+
+  // --- 1. DataValidator ---
+  const DataValidator = (function() {
+    /**
+     * Sanitizes user input to prevent XSS.
+     * @param {string|number|null|undefined} input - The input string to sanitize.
+     * @returns {string} Sanitized string safely escaped for HTML inclusion.
+     */
+    function sanitizeInput(input) {
+      if (input === null || input === undefined) return '';
+      const div = document.createElement('div');
+      div.appendChild(document.createTextNode(String(input)));
+      return div.innerHTML;
+    }
+
+    /**
+     * Validates activity form input against logical rules and max thresholds.
+     * @param {Object} formData - Key-value pair object of form data.
+     * @returns {{valid: boolean, errors: string[]}} Validation result state and any associated error strings.
+     */
+    function validateActivityInput(formData) {
+      const errors = [];
+      const value = parseFloat(formData.value);
+      if (isNaN(value) || value < 0) {
+        errors.push("Amount must be a positive number.");
+      }
+      if (value > 999999) {
+        errors.push("Amount exceeds maximum allowed limit.");
+      }
+      if (!formData.category || !EMISSION_FACTORS[formData.category]) {
+        errors.push("Invalid category.");
+      } else if (!formData.subcategory || EMISSION_FACTORS[formData.category][formData.subcategory] === undefined) {
+        errors.push("Invalid subcategory.");
+      }
+      return { valid: errors.length === 0, errors };
+    }
+
+    return { sanitizeInput, validateActivityInput };
+  })();
+
+  // --- 2. EmissionsCalculator ---
+  const EmissionsCalculator = (function() {
+    /**
+     * Calculates the raw emissions based on factors.
+     * @param {string} category - Primary category (e.g., 'transport')
+     * @param {string} subcategory - Subcategory (e.g., 'car')
+     * @param {number} value - The input magnitude (e.g., distance or weight)
+     * @returns {number} Calculated CO2 equivalent in kg
+     */
+    function calculateEmissions(category, subcategory, value) {
+      if (!EMISSION_FACTORS[category] || EMISSION_FACTORS[category][subcategory] === undefined) return 0;
+      return EMISSION_FACTORS[category][subcategory] * value;
+    }
+
+    return { 
+      calculateEmissions,
+      /**
+       * Specialized transport calculator.
+       * @param {string} mode - The vehicle type
+       * @param {number} km - Distance in kilometers
+       * @returns {number} CO2 in kg
+       */
+      calculateTransportEmissions: (mode, km) => calculateEmissions('transport', mode, km),
+      /**
+       * Specialized food calculator.
+       * @param {string} item - The food type
+       * @param {number} kg - Weight in kilograms
+       * @returns {number} CO2 in kg
+       */
+      calculateFoodEmissions: (item, kg) => calculateEmissions('food', item, kg)
+    };
+  })();
+
+  // --- 3. AppState ---
+  const AppState = (function() {
+    let entries = [];
+    let adoptedInsights = [];
+    let supabase = null;
+
+    /**
+     * Generates a crypto-secure UUID v4, falling back to Math.random if unavailable.
+     * @returns {string} The generated UUID.
+     */
+    function generateUUID() {
+      if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+      return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+        var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
+        return v.toString(16);
+      });
+    }
+
+    /**
+     * Bootstraps the application state from LocalStorage and/or Supabase.
+     * @async
+     * @returns {Promise<void>}
+     */
+    async function init() {
+      const stored = localStorage.getItem('carbontrace_entries');
+      if (stored) entries = JSON.parse(stored);
+      
+      const storedInsights = localStorage.getItem('carbontrace_adopted_insights');
+      if (storedInsights) adoptedInsights = JSON.parse(storedInsights);
+
+      if (SUPABASE_URL && SUPABASE_KEY) {
+        try {
+          supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+          if (entries.length > 0) await syncLocalToCloud();
+          else await pullCloudData();
+        } catch (err) {
+          console.error("Supabase failed:", err);
+          supabase = null;
+        }
+      }
+      document.dispatchEvent(new Event('stateChanged'));
+    }
+
+    /**
+     * Fetches entries strictly from the connected Supabase cloud logic.
+     * @async
+     * @returns {Promise<void>}
+     */
+    async function pullCloudData() {
+      if (!supabase) return;
+      const { data } = await supabase.from('carbontrace_entries').select('*').order('timestamp', { ascending: false });
+      entries = data || [];
+      document.dispatchEvent(new Event('stateChanged'));
+    }
+
+    /**
+     * Performs an upsert operation pushing local storage records up to the Supabase endpoint.
+     * @async
+     * @returns {Promise<void>}
+     */
+    async function syncLocalToCloud() {
+      if (!supabase) return;
+      for (const entry of entries) {
+        await supabase.from('carbontrace_entries').upsert(entry);
+      }
+    }
+
+    /**
+     * Synchronously persists memory arrays to Window.localStorage.
+     * @returns {void}
+     */
+    function saveLocally() {
+      localStorage.setItem('carbontrace_entries', JSON.stringify(entries));
+      localStorage.setItem('carbontrace_adopted_insights', JSON.stringify(adoptedInsights));
+      document.dispatchEvent(new Event('stateChanged'));
+    }
+
+    /**
+     * Computes the CO2 for an activity block and stores it safely locally and via Supabase.
+     * @async
+     * @param {Object} entryData - Contains category, subcategory, and amount keys.
+     * @returns {Promise<Object>} The final compiled entry.
+     */
+    async function addEntry(entryData) {
+      const co2 = EmissionsCalculator.calculateEmissions(entryData.category, entryData.subcategory, entryData.amount);
+      const entry = {
+        id: generateUUID(),
+        timestamp: new Date().toISOString(),
+        category: entryData.category,
+        subcategory: entryData.subcategory,
+        amount: parseFloat(entryData.amount),
+        co2_kg: co2
+      };
+      entries.unshift(entry);
+      saveLocally();
+      if (supabase) await supabase.from('carbontrace_entries').insert([entry]);
+      return entry;
+    }
+
+    /**
+     * Destroys an entry block matching the targeted UUID.
+     * @async
+     * @param {string} id - The UUID string to target.
+     * @returns {Promise<void>}
+     */
+    async function deleteEntry(id) {
+      entries = entries.filter(e => e.id !== id);
+      saveLocally();
+      if (supabase) await supabase.from('carbontrace_entries').delete().eq('id', id);
+    }
+
+    /**
+     * Destroys all stored local memory records and cloud records asynchronously.
+     * @async
+     * @returns {Promise<void>}
+     */
+    async function clearAll() {
+      entries = [];
+      adoptedInsights = [];
+      saveLocally();
+      if (supabase) await supabase.from('carbontrace_entries').delete().neq('id', '0');
+    }
+
+    /**
+     * Returns a cloned subset of entries to avoid pointer mutation issues.
+     * @returns {Array} List of stored entries
+     */
+    function getEntries() { return [...entries]; }
+
+    /**
+     * Returns cloned insights to prevent state mutation.
+     * @returns {Array} List of adopted insights.
+     */
+    function getAdoptedInsights() { return [...adoptedInsights]; }
+    
+    /**
+     * Marks an insight as 'adopted' tracking the offset of carbon.
+     * @param {number} co2Saved - The estimated reduction in CO2 footprint.
+     * @returns {void}
+     */
+    function addAdoptedInsight(co2Saved) {
+      adoptedInsights.push({ id: generateUUID(), co2Saved, date: new Date().toISOString() });
+      saveLocally();
+    }
+
+    /**
+     * Triggers a browser native download exporting local state into a human-readable JSON payload.
+     * @returns {void}
+     */
+    function exportData() {
+      const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(entries, null, 2));
+      const downloadAnchorNode = document.createElement('a');
+      downloadAnchorNode.setAttribute("href", dataStr);
+      downloadAnchorNode.setAttribute("download", "carbontrace_export.json");
+      document.body.appendChild(downloadAnchorNode);
+      downloadAnchorNode.click();
+      downloadAnchorNode.remove();
+    }
+
+    /**
+     * Testing hook used exclusively by TestRunner mock state ingestion.
+     * @param {Array} mockEntries 
+     * @returns {void}
+     */
+    function _setEntriesForTest(mockEntries) { entries = mockEntries; }
+
+    return { init, addEntry, deleteEntry, getEntries, getAdoptedInsights, addAdoptedInsight, clearAll, exportData, _setEntriesForTest };
+  })();
+
+  // --- 4. ChartRenderer ---
+  const ChartRenderer = (function() {
+    let barChartCtx = null;
+    let doughnutChartCtx = null;
+
+    /**
+     * Binds the Canvas Context instances to their targeted DOM nodes.
+     * @returns {void}
+     */
+    function init() {
+      const barCanvas = document.getElementById('barChart');
+      const doughnutCanvas = document.getElementById('doughnutChart');
+      if (barCanvas) barChartCtx = barCanvas.getContext('2d');
+      if (doughnutCanvas) doughnutChartCtx = doughnutCanvas.getContext('2d');
+    }
+
+    /**
+     * Paints all graphs inside a dedicated requestAnimationFrame stack.
+     * @param {Array} entries - Local records to render
+     * @returns {void}
+     */
+    function render(entries) {
+      requestAnimationFrame(() => {
+        drawBarChart(entries);
+        drawDoughnutChart(entries);
+      });
+    }
+
+    /**
+     * Renders a 7-day chronological bar chart on the canvas payload.
+     * @param {Array} entries 
+     * @returns {void}
+     */
+    function drawBarChart(entries) {
+      if (!barChartCtx) return;
+      const canvas = barChartCtx.canvas;
+      const rect = canvas.parentElement.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = rect.width * dpr;
+      canvas.height = rect.height * dpr;
+      const ctx = barChartCtx;
+      ctx.scale(dpr, dpr);
+      const width = rect.width;
+      const height = rect.height;
+      ctx.clearRect(0, 0, width, height);
+
+      const days = 7;
+      const dailyTotals = Array(days).fill(0).map(() => ({ transport: 0, food: 0, energy: 0, shopping: 0 }));
+      const now = new Date();
+      const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+      entries.forEach(e => {
+        const date = new Date(e.timestamp);
+        const diffTime = Math.abs(todayStart - new Date(date.getFullYear(), date.getMonth(), date.getDate()));
+        const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+        if (diffDays < days) {
+          dailyTotals[6 - diffDays][e.category] += e.co2_kg;
+        }
+      });
+
+      const maxTotal = Math.max(...dailyTotals.map(d => d.transport + d.food + d.energy + d.shopping), 10);
+      const barWidth = (width - 40) / days - 10;
+
+      dailyTotals.forEach((dayData, i) => {
+        let currentY = height - 30;
+        const x = 30 + i * (barWidth + 10);
+        
+        ['transport', 'food', 'energy', 'shopping'].forEach(cat => {
+          const val = dayData[cat];
+          if (val > 0) {
+            const barHeight = (val / maxTotal) * (height - 50);
+            ctx.fillStyle = CATEGORY_COLORS[cat];
+            ctx.fillRect(x, currentY - barHeight, barWidth, barHeight);
+            currentY -= barHeight;
+          }
+        });
+      });
+    }
+
+    /**
+     * Renders an aggregated categorical split Doughnut Chart natively on canvas.
+     * @param {Array} entries 
+     * @returns {void}
+     */
+    function drawDoughnutChart(entries) {
+      if (!doughnutChartCtx) return;
+      const canvas = doughnutChartCtx.canvas;
+      const rect = canvas.parentElement.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = rect.width * dpr;
+      canvas.height = rect.height * dpr;
+      const ctx = doughnutChartCtx;
+      ctx.scale(dpr, dpr);
+      const width = rect.width;
+      const height = rect.height;
+      ctx.clearRect(0, 0, width, height);
+
+      const totals = entries.reduce((acc, e) => {
+        acc[e.category] = (acc[e.category] || 0) + e.co2_kg;
+        return acc;
+      }, { transport: 0, food: 0, energy: 0, shopping: 0 });
+      const totalCO2 = Object.values(totals).reduce((a, b) => a + b, 0);
+      
+      const cx = width / 2;
+      const cy = height / 2;
+      const radius = Math.min(cx, cy) - 20;
+      if (radius <= 0) return;
+      const innerRadius = radius * 0.6;
+
+      if (totalCO2 === 0) {
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+        ctx.fillStyle = '#eee';
+        ctx.fill();
+        return;
+      }
+
+      let startAngle = -Math.PI / 2;
+      for (const [cat, val] of Object.entries(totals)) {
+        if (val > 0) {
+          const sliceAngle = (val / totalCO2) * 2 * Math.PI;
+          ctx.beginPath();
+          ctx.moveTo(cx, cy);
+          ctx.arc(cx, cy, radius, startAngle, startAngle + sliceAngle);
+          ctx.fillStyle = CATEGORY_COLORS[cat];
+          ctx.fill();
+          startAngle += sliceAngle;
+        }
+      }
+
+      ctx.beginPath();
+      ctx.arc(cx, cy, innerRadius, 0, Math.PI * 2);
+      ctx.fillStyle = '#fff';
+      ctx.fill();
+
+      ctx.fillStyle = '#1B2D27';
+      ctx.font = 'bold 20px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(totalCO2.toFixed(1) + ' kg', cx, cy);
+    }
+
+    return { init, render };
+  })();
+
+  // --- 5. InsightsEngine ---
+  const InsightsEngine = (function() {
+    /**
+     * Determines threshold-based actionable metrics and insight tasks.
+     * @param {Array} entries - Full log array to evaluate against
+     * @returns {Array} Derived insight objects.
+     */
+    function generateInsights(entries) {
+      const insights = [];
+      const totals = { transport: 0, food: 0, energy: 0, shopping: 0 };
+      entries.forEach(e => totals[e.category] += e.co2_kg);
+      
+      if (totals.food > 20) {
+        const potentialSavings = (totals.food * 0.5).toFixed(1);
+        insights.push({
+          title: "Reduce Beef Consumption",
+          desc: `Swapping beef for chicken/plant-based options could save ${potentialSavings} kg CO₂.`,
+          difficulty: 'medium',
+          savings: potentialSavings
+        });
+      }
+      if (totals.transport > 50) {
+        const potentialSavings = (totals.transport * 0.3).toFixed(1);
+        insights.push({
+          title: "Optimize Commute",
+          desc: `Using public transit or carpooling twice a week could save ${potentialSavings} kg CO₂.`,
+          difficulty: 'hard',
+          savings: potentialSavings
+        });
+      }
+      if (totals.energy > 30) {
+        const potentialSavings = (totals.energy * 0.15).toFixed(1);
+        insights.push({
+          title: "Energy Efficiency",
+          desc: `Lowering your thermostat by 1°C and switching to LEDs saves ~${potentialSavings} kg CO₂.`,
+          difficulty: 'easy',
+          savings: potentialSavings
+        });
+      }
+      return insights;
+    }
+    return { generateInsights };
+  })();
+
+  // --- 6. UIController ---
+  const UIController = (function() {
+    let currentPage = 1;
+    const itemsPerPage = 10;
+    
+    /**
+     * Orchestrates DOM listeners and UI painting upon successful App initialization.
+     * @returns {void}
+     */
+    function init() {
+      ChartRenderer.init();
+      bindEvents();
+      document.addEventListener('stateChanged', renderAll);
+      window.addEventListener('resize', () => ChartRenderer.render(AppState.getEntries()));
+    }
+
+    /**
+     * Wires DOM Event Listeners exclusively to static elements.
+     * @returns {void}
+     */
+    function bindEvents() {
+      document.querySelectorAll('.nav-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+          e.currentTarget.classList.add('active');
+          document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+          document.getElementById(e.currentTarget.dataset.target).classList.add('active');
+          if (e.currentTarget.dataset.target === 'dashboard') {
+            ChartRenderer.render(AppState.getEntries());
+          }
+        });
+      });
+
+      const catSelect = document.getElementById('category');
+      const subSelect = document.getElementById('subcategory');
+      if (catSelect && subSelect) {
+        catSelect.addEventListener('change', (e) => {
+          const category = e.target.value;
+          subSelect.innerHTML = '';
+          if (EMISSION_FACTORS[category]) {
+            Object.keys(EMISSION_FACTORS[category]).forEach(sub => {
+              const opt = document.createElement('option');
+              opt.value = sub;
+              opt.textContent = sub.charAt(0).toUpperCase() + sub.slice(1);
+              subSelect.appendChild(opt);
+            });
+          }
+        });
+        catSelect.dispatchEvent(new Event('change'));
+      }
+
+      const logForm = document.getElementById('log-form');
+      if (logForm) {
+        logForm.addEventListener('submit', async (e) => {
+          e.preventDefault();
+          const formData = new FormData(logForm);
+          const data = Object.fromEntries(formData.entries());
+          const validation = DataValidator.validateActivityInput(data);
+          if (!validation.valid) {
+            alert("Validation Error:\n" + validation.errors.join("\n"));
+            return;
+          }
+          await AppState.addEntry(data);
+          logForm.reset();
+          catSelect.dispatchEvent(new Event('change'));
+          alert("Activity logged successfully!");
+        });
+      }
+
+      const btnExport = document.getElementById('btn-export');
+      if (btnExport) btnExport.addEventListener('click', () => AppState.exportData());
+
+      const btnClear = document.getElementById('btn-clear');
+      if (btnClear) btnClear.addEventListener('click', async () => {
+        if (confirm("Are you sure you want to clear all data? This cannot be undone.")) {
+          await AppState.clearAll();
+          alert("All data cleared.");
+        }
+      });
+
+      const prevBtn = document.getElementById('prev-page');
+      const nextBtn = document.getElementById('next-page');
+      if (prevBtn) prevBtn.addEventListener('click', () => { currentPage--; renderLogTable(); });
+      if (nextBtn) nextBtn.addEventListener('click', () => { currentPage++; renderLogTable(); });
+    }
+
+    /**
+     * Broadcaster triggering all view repaints simultaneously.
+     * @returns {void}
+     */
+    function renderAll() {
+      renderDashboard();
+      renderLogTable();
+      renderInsights();
+      ChartRenderer.render(AppState.getEntries());
+    }
+
+    /**
+     * Injects temporal KPI metric strings into the Dashboard grid slots.
+     * @returns {void}
+     */
+    function renderDashboard() {
+      const entries = AppState.getEntries();
+      const now = new Date();
+      const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const weekStart = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+
+      let todayTotal = 0, weekTotal = 0, monthTotal = 0, allTotal = 0;
+      entries.forEach(e => {
+        const d = new Date(e.timestamp);
+        const co2 = e.co2_kg;
+        allTotal += co2;
+        if (d >= todayStart) todayTotal += co2;
+        if (d >= weekStart) weekTotal += co2;
+        if (d >= monthStart) monthTotal += co2;
+      });
+
+      document.getElementById('dash-today').textContent = todayTotal.toFixed(1) + ' kg';
+      document.getElementById('dash-week').textContent = weekTotal.toFixed(1) + ' kg';
+      document.getElementById('dash-month').textContent = monthTotal.toFixed(1) + ' kg';
+      document.getElementById('dash-total').textContent = allTotal.toFixed(1) + ' kg';
+    }
+
+    /**
+     * Efficiently paints the paginated Activity table rows via DocumentFragment processing.
+     * @returns {void}
+     */
+    function renderLogTable() {
+      const entries = AppState.getEntries();
+      const totalPages = Math.ceil(entries.length / itemsPerPage) || 1;
+      if (currentPage > totalPages) currentPage = totalPages;
+
+      const tbody = document.getElementById('log-table-body');
+      if (!tbody) return;
+      tbody.innerHTML = '';
+      
+      const frag = document.createDocumentFragment();
+      const start = (currentPage - 1) * itemsPerPage;
+      const pageEntries = entries.slice(start, start + itemsPerPage);
+
+      pageEntries.forEach(entry => {
+        const tr = document.createElement('tr');
+        
+        const tdDate = document.createElement('td');
+        tdDate.textContent = new Date(entry.timestamp).toLocaleDateString();
+        tr.appendChild(tdDate);
+
+        const tdAct = document.createElement('td');
+        tdAct.textContent = `${entry.category.charAt(0).toUpperCase() + entry.category.slice(1)} - ${entry.subcategory.charAt(0).toUpperCase() + entry.subcategory.slice(1)} (${entry.amount})`;
+        tr.appendChild(tdAct);
+
+        const tdCo2 = document.createElement('td');
+        tdCo2.textContent = entry.co2_kg.toFixed(1);
+        tr.appendChild(tdCo2);
+
+        const tdActn = document.createElement('td');
+        const delBtn = document.createElement('button');
+        delBtn.className = 'btn-delete';
+        delBtn.textContent = 'Delete';
+        delBtn.addEventListener('click', () => AppState.deleteEntry(entry.id));
+        tdActn.appendChild(delBtn);
+        tr.appendChild(tdActn);
+
+        frag.appendChild(tr);
+      });
+      tbody.appendChild(frag);
+
+      document.getElementById('page-info').textContent = `Page ${currentPage} of ${totalPages}`;
+      document.getElementById('prev-page').disabled = currentPage === 1;
+      document.getElementById('next-page').disabled = currentPage === totalPages;
+    }
+
+    /**
+     * Handles dynamic component creation for actionable user insights.
+     * @returns {void}
+     */
+    function renderInsights() {
+      const container = document.getElementById('insights-container');
+      if (!container) return;
+      container.innerHTML = '';
+
+      const entries = AppState.getEntries();
+      const insights = InsightsEngine.generateInsights(entries);
+      const frag = document.createDocumentFragment();
+
+      insights.forEach(ins => {
+        const card = document.createElement('div');
+        card.className = 'card insight-card';
+        
+        const content = document.createElement('div');
+        content.className = 'insight-content';
+        const h3 = document.createElement('h3');
+        const badge = document.createElement('span');
+        badge.className = `badge badge-${ins.difficulty}`;
+        badge.textContent = ins.difficulty.toUpperCase();
+        h3.appendChild(badge);
+        h3.appendChild(document.createTextNode(ins.title));
+        
+        const p = document.createElement('p');
+        p.textContent = ins.desc;
+        content.appendChild(h3);
+        content.appendChild(p);
+        
+        const actn = document.createElement('div');
+        const btn = document.createElement('button');
+        btn.className = 'btn-primary';
+        btn.textContent = 'Adopt Insight';
+        btn.addEventListener('click', () => {
+          AppState.addAdoptedInsight(parseFloat(ins.savings));
+          card.remove();
+          renderInsights();
+        });
+        actn.appendChild(btn);
+
+        card.appendChild(content);
+        card.appendChild(actn);
+        frag.appendChild(card);
+      });
+      
+      if (insights.length === 0) {
+        const p = document.createElement('p');
+        p.textContent = "Great job! Your recent activities look very efficient. Log more data to get new insights.";
+        p.style.color = 'var(--text-secondary)';
+        frag.appendChild(p);
+      }
+      container.appendChild(frag);
+
+      const adopted = AppState.getAdoptedInsights();
+      const totalSaved = adopted.reduce((sum, item) => sum + item.co2Saved, 0);
+      const treesEquivalent = Math.floor(totalSaved / 21);
+      
+      const summaryNode = document.getElementById('impact-summary');
+      if (summaryNode) summaryNode.textContent = `You've saved ${totalSaved.toFixed(1)} kg CO₂ equivalent to ${treesEquivalent} trees planted.`;
+      
+      const fill = document.getElementById('progress-fill');
+      if (fill) fill.style.width = Math.min(100, (totalSaved / 100) * 100) + '%';
+    }
+
+    return { init };
+  })();
+
+  // --- 7. TestRunner ---
+  const TestRunner = (function() {
+    /**
+     * Test orchestrator tracking the health profile of logical core components.
+     * @returns {void}
+     */
+    function run() {
+      let passed = 0;
+      let failed = 0;
+      console.groupCollapsed("CarbonTrace Test Suite");
+
+      /**
+       * Core unit test truth evaluation assertion
+       * @param {boolean} condition - Boolean check
+       * @param {string} message - Pass/fail terminal logger readout
+       */
+      function assert(condition, message) {
+        if (condition) {
+          console.log(`✓ ${message}`);
+          passed++;
+        } else {
+          console.error(`✗ ${message}`);
+          failed++;
+        }
+      }
+
+      try {
+        // Validation tests
+        assert(DataValidator.validateActivityInput({category:'transport', subcategory:'flight', value:'10'}).valid === true, "Valid input is valid");
+        assert(DataValidator.validateActivityInput({category:'transport', subcategory:'flight', value:'-1'}).valid === false, "Negative input is invalid");
+        assert(DataValidator.validateActivityInput({category:'invalid', subcategory:'flight', value:'10'}).valid === false, "Invalid category rejected");
+        assert(DataValidator.validateActivityInput({category:'transport', subcategory:'invalid', value:'10'}).valid === false, "Invalid subcategory rejected");
+        assert(DataValidator.validateActivityInput({category:'transport', subcategory:'flight', value:'999999999'}).valid === false, "Extremely large value rejected");
+
+        // Calculator tests
+        assert(EmissionsCalculator.calculateTransportEmissions('car', 100) === 21, "100km car = 21kg CO2");
+        assert(EmissionsCalculator.calculateTransportEmissions('bike', 50) === 0, "50km bike = 0kg CO2");
+        assert(EmissionsCalculator.calculateFoodEmissions('beef', 0.5) === 13.5, "0.5kg beef = 13.5kg CO2");
+        assert(EmissionsCalculator.calculateEmissions('energy', 'electricity', 100) === 23.3, "100kWh electricity = 23.3kg");
+        assert(EmissionsCalculator.calculateEmissions('invalid', 'xyz', 100) === 0, "Invalid calculation returns 0");
+
+        // State testing
+        const initialEntries = AppState.getEntries().length;
+        AppState._setEntriesForTest([{category:'transport', subcategory:'flight', amount:1000, co2_kg: 255}]);
+        assert(AppState.getEntries().length === 1, "Mock State injection works");
+
+        // Insights testing
+        const mockEntries = [
+          { category: 'food', co2_kg: 30 },
+          { category: 'transport', co2_kg: 60 }
+        ];
+        const insights = InsightsEngine.generateInsights(mockEntries);
+        assert(insights.length >= 2, "Insights generated accurately for high values");
+        assert(insights.find(i => i.title.includes('Beef')) !== undefined, "Beef insight present");
+        
+        // Additional Edge Cases
+        assert(DataValidator.validateActivityInput({category:'shopping', subcategory:'electronics', value:'0'}).valid === true, "Zero value is valid");
+        assert(EmissionsCalculator.calculateEmissions('shopping', 'furniture', 2) === 90, "2 furniture items = 90kg");
+        
+        // Reset state
+        AppState._setEntriesForTest([]);
+        
+      } catch (e) {
+        console.error("Test execution failed:", e);
+        failed++;
+      }
+
+      console.groupEnd();
+      
+      const testPill = document.getElementById('test-status-pill');
+      if (testPill) {
+        testPill.textContent = `${passed}/${passed + failed} Passed`;
+        testPill.style.color = failed > 0 ? 'var(--danger)' : 'var(--primary)';
+        testPill.style.fontWeight = '600';
+      }
+    }
+
+    return { run };
+  })();
+
+  // --- Bootstrapping ---
+  document.addEventListener('DOMContentLoaded', async () => {
+    await AppState.init();
+    UIController.init();
+    TestRunner.run();
+  });
+
+})();
