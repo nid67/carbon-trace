@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net;">
   <title>CarbonTrace - Personal Carbon Footprint Tracker</title>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
@@ -13,7 +14,7 @@
       --background: #F8FAF9;
       --surface: #FFFFFF;
       --text-primary: #1B2D27;
-      --text-secondary: #4A6741;
+      --text-secondary: #2B4022;
       --danger: #C1292E;
       --warning: #E9C46A;
       --radius: 12px;
@@ -437,19 +438,24 @@
       <section id="dashboard" class="view active">
         <h1>Dashboard</h1>
         <div class="grid-4">
-          <div class="card metric">
+          <div class="card metric" aria-live="polite">
+            <div class="metric-label">Daily Target Goal</div>
+            <div class="metric-value" id="dash-goal">15.0 kg</div>
+            <p style="font-size: 12px; color: var(--text-secondary); margin-top: 4px;">CO₂ Limit</p>
+          </div>
+          <div class="card metric" aria-live="polite">
             <div class="metric-label">Today's Footprint</div>
             <div class="metric-value" id="dash-today">0 kg</div>
           </div>
-          <div class="card metric">
+          <div class="card metric" aria-live="polite">
             <div class="metric-label">This Week</div>
             <div class="metric-value" id="dash-week">0 kg</div>
           </div>
-          <div class="card metric">
+          <div class="card metric" aria-live="polite">
             <div class="metric-label">This Month</div>
             <div class="metric-value" id="dash-month">0 kg</div>
           </div>
-          <div class="card metric">
+          <div class="card metric" aria-live="polite">
             <div class="metric-label">Total</div>
             <div class="metric-value" id="dash-total">0 kg</div>
           </div>
@@ -476,29 +482,38 @@
         <h1>Log Activity</h1>
         <div class="card">
           <form id="log-form">
-            <div class="form-group">
-              <label for="category">Category</label>
-              <select id="category" name="category" required>
-                <option value="transport">Transport</option>
-                <option value="food">Food</option>
-                <option value="energy">Energy</option>
-                <option value="shopping">Shopping</option>
-              </select>
-            </div>
-            <div class="form-group">
-              <label for="subcategory">Subcategory</label>
-              <select id="subcategory" name="subcategory" required></select>
-            </div>
-            <div class="form-group">
-              <label for="amount">Amount (<span id="unit-label">km</span>)</label>
-              <input type="number" id="amount" name="amount" min="0" step="any" required>
-            </div>
-            <button type="submit" class="btn-primary">Add Entry</button>
+            <fieldset style="border: none; padding: 0; margin: 0;">
+              <legend class="sr-only" style="position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); border: 0;">Activity Details</legend>
+              <div class="form-group">
+                <label for="category">Category</label>
+                <select id="category" name="category" required autocomplete="off">
+                  <option value="transport">Transport</option>
+                  <option value="food">Food</option>
+                  <option value="energy">Energy</option>
+                  <option value="shopping">Shopping</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="subcategory">Subcategory</label>
+                <select id="subcategory" name="subcategory" required autocomplete="off"></select>
+              </div>
+              <div class="form-group">
+                <label for="amount">Amount (<span id="unit-label">km</span>)</label>
+                <input type="number" id="amount" name="amount" min="0" max="999999" step="any" required autocomplete="off">
+              </div>
+              <button type="submit" class="btn-primary">Add Entry</button>
+            </fieldset>
           </form>
         </div>
 
         <div class="card">
-          <h2>Recent Activity</h2>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 10px;">
+            <h2 style="margin-bottom: 0;">Recent Activity</h2>
+            <div style="display: flex; gap: 10px;">
+              <button id="btn-export" class="btn-primary" style="padding: 8px 16px; font-size: 14px; background-color: var(--secondary);">Export JSON</button>
+              <button id="btn-clear" class="btn-primary" style="padding: 8px 16px; font-size: 14px; background-color: var(--danger);">Clear Data</button>
+            </div>
+          </div>
           <div style="overflow-x: auto;">
             <table>
               <thead>
@@ -587,1174 +602,668 @@
   </div>
 
   <script>
+(function() {
+  "use strict";
+
+  /**
+   * TESTABLE UNITS:
+   * - DataValidator.validateActivityInput(formData)
+   * - EmissionsCalculator.calculateTransportEmissions(mode, km)
+   * - EmissionsCalculator.calculateFoodEmissions(item, kg)
+   * - AppState CRUD operations
+   * - InsightsEngine calculations
+   */
+
+  // --- CONFIGURATION & CONSTANTS ---
+  const SUPABASE_URL = "";
+  const SUPABASE_KEY = "";
+
+  const EMISSION_FACTORS = Object.freeze({
+    transport: Object.freeze({ car: 0.21, bus: 0.089, train: 0.041, flight: 0.255, bike: 0, walk: 0 }),
+    food: Object.freeze({ beef: 27, chicken: 6.9, fish: 5.1, vegetables: 2.0, dairy: 3.2 }),
+    energy: Object.freeze({ electricity: 0.233, gas: 0.184, heating: 0.25 }),
+    shopping: Object.freeze({ electronics: 70, clothing: 15, furniture: 45 })
+  });
+
+  const CATEGORY_COLORS = Object.freeze({
+    transport: '#2D6A4F',
+    food: '#E9C46A',
+    energy: '#C1292E',
+    shopping: '#52B788'
+  });
+
+  class ValidationError extends Error {
+    constructor(message) {
+      super(message);
+      this.name = "ValidationError";
+    }
+  }
+
+  // --- 1. DataValidator ---
+  const DataValidator = (function() {
     /**
-     * TESTABLE UNITS:
-     * - EmissionsCalculator.calculateTransportEmissions(mode, km) → number
-     * - EmissionsCalculator.calculateFoodEmissions(item, kg) → number
-     * - AppState.addEntry(entry) → void, persists to localStorage / Supabase
-     * - AppState.updateEntry(id, entry) → void, updates locally / Supabase
-     * - AppState.getEntriesByDateRange(start, end) → Entry[]
-     * - InsightsEngine.generateInsights(entries) → Insight[]
-     * - DataValidator.validateActivityInput(formData) → {valid: boolean, errors: string[]}
-     * 
-     * Test cases:
-     * - calculateTransportEmissions('car', 100) should return 21
-     * - calculateTransportEmissions('bike', 50) should return 0
-     * - validateActivityInput({category:'transport', value:-1}) should return invalid
+     * Sanitizes user input to prevent XSS
+     * @param {string} input - The input string
+     * @returns {string} Sanitized string
      */
+    function sanitizeInput(input) {
+      if (input === null || input === undefined) return '';
+      const div = document.createElement('div');
+      div.appendChild(document.createTextNode(String(input)));
+      return div.innerHTML;
+    }
 
-    // --- SUPABASE DATABASE CONFIGURATION ---
-    // Place your Supabase Project credentials here to enable cloud database synchronization.
-    // If left empty, CarbonTrace will run completely offline using browser Local Storage.
-    const SUPABASE_URL = "";
-    const SUPABASE_KEY = "";
+    /**
+     * Validates activity form input
+     * @param {Object} formData
+     * @returns {Object} {valid: boolean, errors: string[]}
+     */
+    function validateActivityInput(formData) {
+      const errors = [];
+      const value = parseFloat(formData.value);
+      if (isNaN(value) || value < 0) {
+        errors.push("Amount must be a positive number.");
+      }
+      if (value > 999999) {
+        errors.push("Amount exceeds maximum allowed limit.");
+      }
+      if (!formData.category || !EMISSION_FACTORS[formData.category]) {
+        errors.push("Invalid category.");
+      } else if (!formData.subcategory || EMISSION_FACTORS[formData.category][formData.subcategory] === undefined) {
+        errors.push("Invalid subcategory.");
+      }
+      return { valid: errors.length === 0, errors };
+    }
 
-    const EMISSION_FACTORS = {
-      transport: { car: 0.21, bus: 0.089, train: 0.041, flight: 0.255, bike: 0, walk: 0 },
-      food: { beef: 27, chicken: 6.9, fish: 5.1, vegetables: 2.0, dairy: 3.2 },
-      energy: { electricity: 0.233, gas: 0.184, heating: 0.25 },
-      shopping: { electronics: 70, clothing: 15, furniture: 45 }
+    return { sanitizeInput, validateActivityInput };
+  })();
+
+  // --- 2. EmissionsCalculator ---
+  const EmissionsCalculator = (function() {
+    /**
+     * @param {string} category 
+     * @param {string} subcategory 
+     * @param {number} value 
+     * @returns {number} CO2 in kg
+     */
+    function calculateEmissions(category, subcategory, value) {
+      if (!EMISSION_FACTORS[category] || EMISSION_FACTORS[category][subcategory] === undefined) return 0;
+      return EMISSION_FACTORS[category][subcategory] * value;
+    }
+
+    return { 
+      calculateEmissions,
+      calculateTransportEmissions: (mode, km) => calculateEmissions('transport', mode, km),
+      calculateFoodEmissions: (item, kg) => calculateEmissions('food', item, kg)
     };
+  })();
 
-    const CATEGORY_COLORS = {
-      transport: '#2D6A4F',
-      food: '#E9C46A',
-      energy: '#C1292E',
-      shopping: '#52B788'
-    };
+  // --- 3. AppState ---
+  const AppState = (function() {
+    let entries = [];
+    let adoptedInsights = [];
+    let supabase = null;
 
-    // --- 1. DataValidator ---
-    const DataValidator = (function() {
-      /**
-       * Sanitizes user input to prevent XSS
-       * @param {string} input - The input string to sanitize
-       * @returns {string} Sanitized string
-       */
-      function sanitizeInput(input) {
-        if (input === null || input === undefined) return '';
-        const div = document.createElement('div');
-        div.appendChild(document.createTextNode(String(input)));
-        return div.innerHTML;
-      }
+    function generateUUID() {
+      if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+      return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+        var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
+        return v.toString(16);
+      });
+    }
 
-      /**
-       * Validates activity form input
-       * @param {Object} formData - The form data object
-       * @returns {Object} {valid: boolean, errors: string[]}
-       */
-      function validateActivityInput(formData) {
-        const errors = [];
-        const value = parseFloat(formData.value);
-        if (isNaN(value) || value < 0) {
-          errors.push("Amount must be a positive number.");
-        }
-        if (value > 999999) {
-          errors.push("Amount exceeds maximum allowed limit.");
-        }
-        if (!EMISSION_FACTORS[formData.category]) {
-          errors.push("Invalid category.");
-        } else if (formData.subcategory && EMISSION_FACTORS[formData.category][formData.subcategory] === undefined) {
-          errors.push("Invalid subcategory.");
-        }
-        return { valid: errors.length === 0, errors };
-      }
-
-      return { sanitizeInput, validateActivityInput };
-    })();
-
-    // --- 2. EmissionsCalculator ---
-    const EmissionsCalculator = (function() {
-      /**
-       * Calculates CO2 emissions based on category
-       * @param {string} category - Main category
-       * @param {string} subcategory - Subcategory
-       * @param {number} value - Amount/Quantity/Distance
-       * @returns {number} CO2 in kg
-       */
-      function calculateEmissions(category, subcategory, value) {
-        if (!EMISSION_FACTORS[category] || EMISSION_FACTORS[category][subcategory] === undefined) {
-          return 0;
-        }
-        return EMISSION_FACTORS[category][subcategory] * value;
-      }
-
-      /**
-       * Calculates transport emissions specifically
-       * @param {string} mode - Transport mode (car|bus|train|flight|bike|walk)
-       * @param {number} km - Distance in km
-       * @returns {number} CO2 in kg
-       */
-      function calculateTransportEmissions(mode, km) {
-        return calculateEmissions('transport', mode, km);
-      }
-
-      /**
-       * Calculates food emissions specifically
-       * @param {string} item - Food item (beef|chicken|fish|vegetables|dairy)
-       * @param {number} kg - Quantity in kg
-       * @returns {number} CO2 in kg
-       */
-      function calculateFoodEmissions(item, kg) {
-        return calculateEmissions('food', item, kg);
-      }
-
-      return { calculateEmissions, calculateTransportEmissions, calculateFoodEmissions };
-    })();
-
-    // --- 3. AppState ---
-    const AppState = (function() {
-      let entries = [];
-      let adoptedInsights = [];
-      let supabase = null;
-
-      /**
-       * Generates a UUID v4
-       * @returns {string} UUID
-       */
-      function generateUUID() {
-        if (typeof crypto !== 'undefined' && crypto.randomUUID) {
-          return crypto.randomUUID();
-        }
-        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-          var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
-          return v.toString(16);
-        });
-      }
-
-      /**
-       * Initializes state and handles automatic Supabase setup/sync
-       * @returns {Promise<void>} Resolves when initialized
-       */
-      async function init() {
-        const stored = localStorage.getItem('carbontrace_entries');
-        if (stored) {
-          entries = JSON.parse(stored);
-        }
-        
-        const storedInsights = localStorage.getItem('carbontrace_adopted_insights');
-        if (storedInsights) {
-          adoptedInsights = JSON.parse(storedInsights);
-        }
-
-        // Connect Supabase if variables are configured
-        if (SUPABASE_URL && SUPABASE_KEY) {
-          try {
-            if (!window.supabase) {
-              throw new Error("Supabase SDK not loaded.");
-            }
-            supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
-            
-            // Validate connection
-            const { error } = await supabase.from('carbontrace_entries').select('*').limit(1);
-            if (error) throw error;
-            
-            // Auto sync local storage entries to Supabase if any exist
-            if (entries.length > 0) {
-              await syncLocalToCloud();
-            } else {
-              await pullCloudData();
-            }
-          } catch (err) {
-            console.error("Supabase connection failed, working offline:", err);
-            supabase = null;
-          }
-        }
-
-        document.dispatchEvent(new Event('stateChanged'));
-      }
-
-      /**
-       * Fetches latest data from Supabase
-       * @returns {Promise<void>} Resolves when cloud data fetched
-       */
-      async function pullCloudData() {
-        if (!supabase) return;
-        const { data: entriesData, error: entriesError } = await supabase
-          .from('carbontrace_entries')
-          .select('*')
-          .order('timestamp', { ascending: false });
-        
-        if (entriesError) throw entriesError;
-        entries = entriesData || [];
-
-        const { data: insightsData, error: insightsError } = await supabase
-          .from('carbontrace_adopted_insights')
-          .select('*');
-
-        if (insightsError) throw insightsError;
-        adoptedInsights = (insightsData || []).map(row => ({
-          id: row.id,
-          co2Saved: parseFloat(row.co2_saved),
-          date: row.created_at
-        }));
-
-        document.dispatchEvent(new Event('stateChanged'));
-      }
-
-      /**
-       * Syncs local storage entries up to Supabase and clears local copy
-       * @returns {Promise<void>} Resolves when sync completes
-       */
-      async function syncLocalToCloud() {
-        if (!supabase) return;
-        
-        if (entries.length > 0) {
-          const formatted = entries.map(e => ({
-            id: e.id,
-            timestamp: e.timestamp,
-            category: e.category,
-            subcategory: e.subcategory,
-            value: e.value,
-            unit: e.unit,
-            co2_kg: e.co2_kg
-          }));
-          const { error } = await supabase.from('carbontrace_entries').insert(formatted);
-          if (error) throw error;
-        }
-
-        if (adoptedInsights.length > 0) {
-          const formatted = adoptedInsights.map(i => ({
-            id: i.id,
-            co2_saved: i.co2Saved
-          }));
-          const { error } = await supabase.from('carbontrace_adopted_insights').insert(formatted);
-          if (error) throw error;
-        }
-
-        // Clean out LocalStorage copies once synchronized
-        localStorage.removeItem('carbontrace_entries');
-        localStorage.removeItem('carbontrace_adopted_insights');
-
-        await pullCloudData();
-      }
-
-      /**
-       * Adds a new entry
-       * @param {Object} data - The activity data object
-       * @returns {Promise<void>} Resolves when entry is added
-       */
-      async function addEntry(data) {
-        const co2_kg = EmissionsCalculator.calculateEmissions(data.category, data.subcategory, data.value);
-        
-        const units = {
-          transport: 'km',
-          food: 'kg',
-          energy: 'kWh',
-          shopping: 'items'
-        };
-
-        const entry = {
-          id: generateUUID(),
-          timestamp: new Date().toISOString(),
-          category: data.category,
-          subcategory: data.subcategory,
-          value: parseFloat(data.value),
-          unit: units[data.category] || '',
-          co2_kg: co2_kg
-        };
-
-        if (supabase) {
-          const { error } = await supabase
-            .from('carbontrace_entries')
-            .insert([{
-              id: entry.id,
-              timestamp: entry.timestamp,
-              category: entry.category,
-              subcategory: entry.subcategory,
-              value: entry.value,
-              unit: entry.unit,
-              co2_kg: entry.co2_kg
-            }]);
-          if (error) {
-            alert("Database insert error: " + error.message);
-            return;
-          }
-        }
-
-        entries.push(entry);
-        entries.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-        
-        if (!supabase) {
-          localStorage.setItem('carbontrace_entries', JSON.stringify(entries));
-        }
-        document.dispatchEvent(new Event('stateChanged'));
-      }
-
-      /**
-       * Updates an existing entry
-       * @param {string} id - Entry ID
-       * @param {Object} data - Updated fields
-       * @returns {Promise<void>} Resolves when updated
-       */
-      async function updateEntry(id, data) {
-        const co2_kg = EmissionsCalculator.calculateEmissions(data.category, data.subcategory, data.value);
-        const originalEntry = entries.find(e => e.id === id);
-        if (!originalEntry) return;
-
-        const units = {
-          transport: 'km',
-          food: 'kg',
-          energy: 'kWh',
-          shopping: 'items'
-        };
-
-        const updatedEntry = {
-          id: id,
-          timestamp: originalEntry.timestamp, // Keep original timestamp
-          category: data.category,
-          subcategory: data.subcategory,
-          value: parseFloat(data.value),
-          unit: units[data.category] || '',
-          co2_kg: co2_kg
-        };
-
-        if (supabase) {
-          const { error } = await supabase
-            .from('carbontrace_entries')
-            .update({
-              category: updatedEntry.category,
-              subcategory: updatedEntry.subcategory,
-              value: updatedEntry.value,
-              unit: updatedEntry.unit,
-              co2_kg: updatedEntry.co2_kg
-            })
-            .eq('id', id);
-          if (error) {
-            alert("Database update error: " + error.message);
-            return;
-          }
-        }
-
-        entries = entries.map(e => e.id === id ? updatedEntry : e);
-        entries.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-
-        if (!supabase) {
-          localStorage.setItem('carbontrace_entries', JSON.stringify(entries));
-        }
-        document.dispatchEvent(new Event('stateChanged'));
-      }
-
-      /**
-       * Deletes an entry by ID
-       * @param {string} id - Entry ID
-       * @returns {Promise<void>} Resolves when deleted
-       */
-      async function deleteEntry(id) {
-        if (supabase) {
-          const { error } = await supabase
-            .from('carbontrace_entries')
-            .delete()
-            .eq('id', id);
-          if (error) {
-            alert("Database delete error: " + error.message);
-            return;
-          }
-        }
-        
-        entries = entries.filter(e => e.id !== id);
-        
-        if (!supabase) {
-          localStorage.setItem('carbontrace_entries', JSON.stringify(entries));
-        }
-        document.dispatchEvent(new Event('stateChanged'));
-      }
-
-      /**
-       * Returns all entries
-       * @returns {Array} List of entries
-       */
-      function getEntries() {
-        return entries;
-      }
+    async function init() {
+      const stored = localStorage.getItem('carbontrace_entries');
+      if (stored) entries = JSON.parse(stored);
       
-      /**
-       * Returns entries within a date range
-       * @param {Date} start - Start date
-       * @param {Date} end - End date
-       * @returns {Array} Filtered list of entries
-       */
-      function getEntriesByDateRange(start, end) {
-        return entries.filter(e => {
-          const d = new Date(e.timestamp);
-          return d >= start && d <= end;
-        });
-      }
-      
-      /**
-       * Marks an insight as adopted
-       * @param {string} insightId - Unique ID of the insight
-       * @param {number} co2Saved - Amount of CO2 saved
-       * @returns {Promise<void>} Resolves when insight adopted
-       */
-      async function markInsightAdopted(insightId, co2Saved) {
-        if (!adoptedInsights.find(i => i.id === insightId)) {
-          const adopted = { id: insightId, co2Saved, date: new Date().toISOString() };
-          
-          if (supabase) {
-            const { error } = await supabase
-              .from('carbontrace_adopted_insights')
-              .insert([{
-                id: insightId,
-                co2_saved: co2Saved
-              }]);
-            if (error) {
-              alert("Database insert error: " + error.message);
-              return;
-            }
-          }
-          
-          adoptedInsights.push(adopted);
-          
-          if (!supabase) {
-            localStorage.setItem('carbontrace_adopted_insights', JSON.stringify(adoptedInsights));
-          }
-          document.dispatchEvent(new Event('stateChanged'));
+      const storedInsights = localStorage.getItem('carbontrace_adopted_insights');
+      if (storedInsights) adoptedInsights = JSON.parse(storedInsights);
+
+      if (SUPABASE_URL && SUPABASE_KEY) {
+        try {
+          supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+          if (entries.length > 0) await syncLocalToCloud();
+          else await pullCloudData();
+        } catch (err) {
+          console.error("Supabase failed:", err);
+          supabase = null;
         }
       }
-      
-      /**
-       * Gets all adopted insights
-       * @returns {Array} List of adopted insights
-       */
-      function getAdoptedInsights() {
-        return adoptedInsights;
-      }
+      document.dispatchEvent(new Event('stateChanged'));
+    }
 
-      return {
-        init,
-        getEntries,
-        getEntriesByDateRange,
-        addEntry,
-        updateEntry,
-        deleteEntry,
-        markInsightAdopted,
-        getAdoptedInsights
+    async function pullCloudData() {
+      if (!supabase) return;
+      const { data } = await supabase.from('carbontrace_entries').select('*').order('timestamp', { ascending: false });
+      entries = data || [];
+      document.dispatchEvent(new Event('stateChanged'));
+    }
+
+    async function syncLocalToCloud() {
+      if (!supabase) return;
+      for (const entry of entries) {
+        await supabase.from('carbontrace_entries').upsert(entry);
+      }
+    }
+
+    function saveLocally() {
+      localStorage.setItem('carbontrace_entries', JSON.stringify(entries));
+      localStorage.setItem('carbontrace_adopted_insights', JSON.stringify(adoptedInsights));
+      document.dispatchEvent(new Event('stateChanged'));
+    }
+
+    async function addEntry(entryData) {
+      const co2 = EmissionsCalculator.calculateEmissions(entryData.category, entryData.subcategory, entryData.amount);
+      const entry = {
+        id: generateUUID(),
+        timestamp: new Date().toISOString(),
+        category: entryData.category,
+        subcategory: entryData.subcategory,
+        amount: parseFloat(entryData.amount),
+        co2_kg: co2
       };
-    })();
+      entries.unshift(entry);
+      saveLocally();
+      if (supabase) await supabase.from('carbontrace_entries').insert([entry]);
+      return entry;
+    }
 
-    // --- 4. ChartRenderer ---
-    const ChartRenderer = (function() {
-      /**
-       * Renders a bar chart showing CO2 for the last 7 days
-       * @param {HTMLCanvasElement} canvas - Target canvas element
-       * @param {Array} entries - List of entries
-       * @param {number} width - Logical width
-       * @param {number} height - Logical height
-       */
-      function renderBarChart(canvas, entries, width, height) {
-        const ctx = canvas.getContext('2d');
-        ctx.clearRect(0, 0, width, height);
+    async function deleteEntry(id) {
+      entries = entries.filter(e => e.id !== id);
+      saveLocally();
+      if (supabase) await supabase.from('carbontrace_entries').delete().eq('id', id);
+    }
 
-        const days = [];
-        const now = new Date();
-        for (let i = 6; i >= 0; i--) {
-          const d = new Date(now);
-          d.setDate(d.getDate() - i);
-          days.push(d.toISOString().split('T')[0]);
+    async function clearAll() {
+      entries = [];
+      adoptedInsights = [];
+      saveLocally();
+      if (supabase) await supabase.from('carbontrace_entries').delete().neq('id', '0');
+    }
+
+    function getEntries() { return [...entries]; }
+    function getAdoptedInsights() { return [...adoptedInsights]; }
+    
+    function addAdoptedInsight(co2Saved) {
+      adoptedInsights.push({ id: generateUUID(), co2Saved, date: new Date().toISOString() });
+      saveLocally();
+    }
+
+    function exportData() {
+      const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(entries, null, 2));
+      const downloadAnchorNode = document.createElement('a');
+      downloadAnchorNode.setAttribute("href", dataStr);
+      downloadAnchorNode.setAttribute("download", "carbontrace_export.json");
+      document.body.appendChild(downloadAnchorNode);
+      downloadAnchorNode.click();
+      downloadAnchorNode.remove();
+    }
+
+    // Explicit test overrides
+    function _setEntriesForTest(mockEntries) { entries = mockEntries; }
+
+    return { init, addEntry, deleteEntry, getEntries, getAdoptedInsights, addAdoptedInsight, clearAll, exportData, _setEntriesForTest };
+  })();
+
+  // --- 4. ChartRenderer ---
+  const ChartRenderer = (function() {
+    let barChartCtx = null;
+    let doughnutChartCtx = null;
+
+    function init() {
+      const barCanvas = document.getElementById('barChart');
+      const doughnutCanvas = document.getElementById('doughnutChart');
+      if (barCanvas) barChartCtx = barCanvas.getContext('2d');
+      if (doughnutCanvas) doughnutChartCtx = doughnutCanvas.getContext('2d');
+    }
+
+    function render(entries) {
+      requestAnimationFrame(() => {
+        drawBarChart(entries);
+        drawDoughnutChart(entries);
+      });
+    }
+
+    function drawBarChart(entries) {
+      if (!barChartCtx) return;
+      const canvas = barChartCtx.canvas;
+      const rect = canvas.parentElement.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = rect.width * dpr;
+      canvas.height = rect.height * dpr;
+      const ctx = barChartCtx;
+      ctx.scale(dpr, dpr);
+      const width = rect.width;
+      const height = rect.height;
+      ctx.clearRect(0, 0, width, height);
+
+      const days = 7;
+      const dailyTotals = Array(days).fill(0).map(() => ({ transport: 0, food: 0, energy: 0, shopping: 0 }));
+      const now = new Date();
+      const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+      entries.forEach(e => {
+        const date = new Date(e.timestamp);
+        const diffTime = Math.abs(todayStart - new Date(date.getFullYear(), date.getMonth(), date.getDate()));
+        const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+        if (diffDays < days) {
+          dailyTotals[6 - diffDays][e.category] += e.co2_kg;
         }
+      });
 
-        const dataByDay = days.map(dayStr => {
-          const dayEntries = entries.filter(e => e.timestamp.startsWith(dayStr));
-          return dayEntries.reduce((acc, e) => {
-            acc[e.category] = (acc[e.category] || 0) + e.co2_kg;
-            return acc;
-          }, { transport: 0, food: 0, energy: 0, shopping: 0 });
-        });
+      const maxTotal = Math.max(...dailyTotals.map(d => d.transport + d.food + d.energy + d.shopping), 10);
+      const barWidth = (width - 40) / days - 10;
 
-        const maxTotal = Math.max(...dataByDay.map(d => d.transport + d.food + d.energy + d.shopping), 10);
+      dailyTotals.forEach((dayData, i) => {
+        let currentY = height - 30;
+        const x = 30 + i * (barWidth + 10);
         
-        const padding = 40;
-        const chartWidth = width - padding * 2;
-        const chartHeight = height - padding * 2;
-        const barWidth = (chartWidth / 7) * 0.6;
-        const gap = (chartWidth / 7) * 0.4;
-
-        // Draw axes
-        ctx.beginPath();
-        ctx.moveTo(padding, padding);
-        ctx.lineTo(padding, height - padding);
-        ctx.lineTo(width - padding, height - padding);
-        ctx.strokeStyle = '#ccc';
-        ctx.stroke();
-
-        const categories = ['transport', 'food', 'energy', 'shopping'];
-        
-        dataByDay.forEach((dayData, i) => {
-          let currentY = height - padding;
-          const x = padding + gap/2 + i * (barWidth + gap);
-
-          categories.forEach(cat => {
-            const val = dayData[cat];
-            if (val > 0) {
-              const barHeight = (val / maxTotal) * chartHeight;
-              ctx.fillStyle = CATEGORY_COLORS[cat];
-              ctx.fillRect(x, currentY - barHeight, barWidth, barHeight);
-              currentY -= barHeight;
-            }
-          });
-
-          // Draw X axis labels
-          ctx.fillStyle = '#4A6741';
-          ctx.font = '12px sans-serif';
-          ctx.textAlign = 'center';
-          const dateObj = new Date(days[i]);
-          const label = dateObj.toLocaleDateString(undefined, { weekday: 'short' });
-          ctx.fillText(label, x + barWidth/2, height - padding + 20);
-        });
-      }
-
-      /**
-       * Renders a doughnut chart for category split
-       * @param {HTMLCanvasElement} canvas - Target canvas
-       * @param {Array} entries - List of entries
-       * @param {number} width - Logical width
-       * @param {number} height - Logical height
-       */
-      function renderDoughnutChart(canvas, entries, width, height) {
-        const ctx = canvas.getContext('2d');
-        ctx.clearRect(0, 0, width, height);
-
-        const totals = entries.reduce((acc, e) => {
-          acc[e.category] = (acc[e.category] || 0) + e.co2_kg;
-          return acc;
-        }, { transport: 0, food: 0, energy: 0, shopping: 0 });
-
-        const totalCO2 = Object.values(totals).reduce((a, b) => a + b, 0);
-        
-        const cx = width / 2;
-        const cy = height / 2;
-        const radius = Math.min(cx, cy) - 20;
-        if (radius <= 0) return;
-        const innerRadius = radius * 0.6;
-
-        if (totalCO2 === 0) {
-          ctx.beginPath();
-          ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-          ctx.fillStyle = '#eee';
-          ctx.fill();
-          ctx.beginPath();
-          ctx.arc(cx, cy, innerRadius, 0, Math.PI * 2);
-          ctx.fillStyle = '#fff';
-          ctx.fill();
-          return;
-        }
-
-        let startAngle = -Math.PI / 2;
-        for (const [cat, val] of Object.entries(totals)) {
+        ['transport', 'food', 'energy', 'shopping'].forEach(cat => {
+          const val = dayData[cat];
           if (val > 0) {
-            const sliceAngle = (val / totalCO2) * 2 * Math.PI;
-            ctx.beginPath();
-            ctx.moveTo(cx, cy);
-            ctx.arc(cx, cy, radius, startAngle, startAngle + sliceAngle);
+            const barHeight = (val / maxTotal) * (height - 50);
             ctx.fillStyle = CATEGORY_COLORS[cat];
-            ctx.fill();
-            startAngle += sliceAngle;
+            ctx.fillRect(x, currentY - barHeight, barWidth, barHeight);
+            currentY -= barHeight;
           }
-        }
+        });
+      });
+    }
 
-        // Cutout center for doughnut
+    function drawDoughnutChart(entries) {
+      if (!doughnutChartCtx) return;
+      const canvas = doughnutChartCtx.canvas;
+      const rect = canvas.parentElement.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = rect.width * dpr;
+      canvas.height = rect.height * dpr;
+      const ctx = doughnutChartCtx;
+      ctx.scale(dpr, dpr);
+      const width = rect.width;
+      const height = rect.height;
+      ctx.clearRect(0, 0, width, height);
+
+      const totals = entries.reduce((acc, e) => {
+        acc[e.category] = (acc[e.category] || 0) + e.co2_kg;
+        return acc;
+      }, { transport: 0, food: 0, energy: 0, shopping: 0 });
+      const totalCO2 = Object.values(totals).reduce((a, b) => a + b, 0);
+      
+      const cx = width / 2;
+      const cy = height / 2;
+      const radius = Math.min(cx, cy) - 20;
+      if (radius <= 0) return;
+      const innerRadius = radius * 0.6;
+
+      if (totalCO2 === 0) {
         ctx.beginPath();
-        ctx.arc(cx, cy, innerRadius, 0, Math.PI * 2);
-        ctx.fillStyle = '#fff';
+        ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+        ctx.fillStyle = '#eee';
         ctx.fill();
-
-        // Draw Total Text
-        ctx.fillStyle = '#1B2D27';
-        ctx.font = 'bold 20px sans-serif';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(totalCO2.toFixed(1) + ' kg', cx, cy);
+        return;
       }
 
-      /**
-       * Safe renderer handling high DPI scaling
-       * @param {Array} entries - List of entries
-       */
-      function renderChartsSafe(entries) {
-        requestAnimationFrame(() => {
-          const barCanvas = document.getElementById('barChart');
-          const doughnutCanvas = document.getElementById('doughnutChart');
-          const dpr = window.devicePixelRatio || 1;
-
-          if (barCanvas && barCanvas.parentElement) {
-            const rect = barCanvas.parentElement.getBoundingClientRect();
-            barCanvas.width = rect.width * dpr;
-            barCanvas.height = rect.height * dpr;
-            barCanvas.style.width = rect.width + 'px';
-            barCanvas.style.height = rect.height + 'px';
-            const ctx = barCanvas.getContext('2d');
-            ctx.scale(dpr, dpr);
-            renderBarChart(barCanvas, entries, rect.width, rect.height);
-          }
-          if (doughnutCanvas && doughnutCanvas.parentElement) {
-             const rect = doughnutCanvas.parentElement.getBoundingClientRect();
-             doughnutCanvas.width = rect.width * dpr;
-             doughnutCanvas.height = rect.height * dpr;
-             doughnutCanvas.style.width = rect.width + 'px';
-             doughnutCanvas.style.height = rect.height + 'px';
-             const ctx = doughnutCanvas.getContext('2d');
-             ctx.scale(dpr, dpr);
-             renderDoughnutChart(doughnutCanvas, entries, rect.width, rect.height);
-          }
-        });
+      let startAngle = -Math.PI / 2;
+      for (const [cat, val] of Object.entries(totals)) {
+        if (val > 0) {
+          const sliceAngle = (val / totalCO2) * 2 * Math.PI;
+          ctx.beginPath();
+          ctx.moveTo(cx, cy);
+          ctx.arc(cx, cy, radius, startAngle, startAngle + sliceAngle);
+          ctx.fillStyle = CATEGORY_COLORS[cat];
+          ctx.fill();
+          startAngle += sliceAngle;
+        }
       }
 
-      return { renderCharts: renderChartsSafe };
-    })();
+      ctx.beginPath();
+      ctx.arc(cx, cy, innerRadius, 0, Math.PI * 2);
+      ctx.fillStyle = '#fff';
+      ctx.fill();
 
-    // --- 5. InsightsEngine ---
-    const InsightsEngine = (function() {
-      /**
-       * Analyzes entries and generates insights
-       * @param {Array} entries - List of activities
-       * @returns {Array} List of computed insights
-       */
-      function generateInsights(entries) {
-        const insights = [];
+      ctx.fillStyle = '#1B2D27';
+      ctx.font = 'bold 20px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(totalCO2.toFixed(1) + ' kg', cx, cy);
+    }
 
-        const stats = entries.reduce((acc, entry) => {
-          acc.total += entry.co2_kg;
-          acc[entry.category] = (acc[entry.category] || 0) + entry.co2_kg;
-          if (entry.subcategory === 'beef') {
-            acc.beefCount = (acc.beefCount || 0) + 1;
-            acc.beefSum = (acc.beefSum || 0) + entry.value;
-          }
-          return acc;
-        }, { total: 0, transport: 0, food: 0, energy: 0, shopping: 0, beefCount: 0, beefSum: 0 });
+    return { init, render };
+  })();
 
-        if (stats.total === 0) return insights;
-
-        if (stats.transport / stats.total > 0.5) {
-          insights.push({
-            id: 'ins_transport_ev',
-            title: 'Switch to Carpooling or EV',
-            desc: 'Transport represents over 50% of your footprint. Carpooling or driving an EV can cut emissions substantially.',
-            savings: 1200,
-            difficulty: 'hard',
-            difficultyClass: 'badge-hard'
-          });
-        }
-
-        if (stats.beefCount > 0) {
-          // Dynamic calculation: replace beef 1x/week (assumed portion size is average of logged beef consumption, or 0.2kg default)
-          const avgBeefPortion = stats.beefSum / stats.beefCount || 0.2;
-          const dynamicSavings = Math.round(avgBeefPortion * 27 * 52); // beef factor = 27, 52 weeks
-          
-          insights.push({
-            id: 'ins_food_beef',
-            title: 'Reduce Red Meat',
-            desc: `Replacing beef 1x/week with poultry or plant-based options saves approximately ${dynamicSavings} kg CO₂/year.`,
-            savings: dynamicSavings,
-            difficulty: 'medium',
-            difficultyClass: 'badge-medium'
-          });
-        }
-
-        if (stats.energy / stats.total > 0.3) {
-          insights.push({
-            id: 'ins_energy_led',
-            title: 'Install LED Lighting & Smart Thermostat',
-            desc: 'High energy emissions detected. Switching to energy-saving bulbs and smart climate controls decreases energy footprints.',
-            savings: 300,
-            difficulty: 'easy',
-            difficultyClass: 'badge-easy'
-          });
-        }
-
+  // --- 5. InsightsEngine ---
+  const InsightsEngine = (function() {
+    function generateInsights(entries) {
+      const insights = [];
+      const totals = { transport: 0, food: 0, energy: 0, shopping: 0 };
+      entries.forEach(e => totals[e.category] += e.co2_kg);
+      
+      if (totals.food > 20) {
+        const potentialSavings = (totals.food * 0.5).toFixed(1);
         insights.push({
-          id: 'ins_shop_local',
-          title: 'Buy Local Produce',
-          desc: 'Reduces long-haul logistics and transportation emissions associated with food supply chains.',
-          savings: 100,
+          title: "Reduce Beef Consumption",
+          desc: `Swapping beef for chicken/plant-based options could save ${potentialSavings} kg CO₂.`,
+          difficulty: 'medium',
+          savings: potentialSavings
+        });
+      }
+      if (totals.transport > 50) {
+        const potentialSavings = (totals.transport * 0.3).toFixed(1);
+        insights.push({
+          title: "Optimize Commute",
+          desc: `Using public transit or carpooling twice a week could save ${potentialSavings} kg CO₂.`,
+          difficulty: 'hard',
+          savings: potentialSavings
+        });
+      }
+      if (totals.energy > 30) {
+        const potentialSavings = (totals.energy * 0.15).toFixed(1);
+        insights.push({
+          title: "Energy Efficiency",
+          desc: `Lowering your thermostat by 1°C and switching to LEDs saves ~${potentialSavings} kg CO₂.`,
           difficulty: 'easy',
-          difficultyClass: 'badge-easy'
+          savings: potentialSavings
         });
-
-        return insights.sort((a, b) => b.savings - a.savings).slice(0, 3);
       }
+      return insights;
+    }
+    return { generateInsights };
+  })();
 
-      return { generateInsights };
-    })();
+  // --- 6. UIController ---
+  const UIController = (function() {
+    let currentPage = 1;
+    const itemsPerPage = 10;
+    
+    function init() {
+      ChartRenderer.init();
+      bindEvents();
+      document.addEventListener('stateChanged', renderAll);
+      window.addEventListener('resize', () => ChartRenderer.render(AppState.getEntries()));
+    }
 
-    // --- 6. UIController ---
-    const UIController = (function() {
-      let DOM = {};
-      let logPage = 0;
-      let editEntryId = null;
-      const PAGE_SIZE = 15;
-
-      /**
-       * Caches DOM elements at initialization
-       */
-      function cacheDOM() {
-        DOM = {
-          navBtns: document.querySelectorAll('.nav-btn'),
-          views: document.querySelectorAll('.view'),
-          
-          dashToday: document.getElementById('dash-today'),
-          dashWeek: document.getElementById('dash-week'),
-          dashMonth: document.getElementById('dash-month'),
-          dashTotal: document.getElementById('dash-total'),
-          
-          logForm: document.getElementById('log-form'),
-          categorySelect: document.getElementById('category'),
-          subcategorySelect: document.getElementById('subcategory'),
-          amountInput: document.getElementById('amount'),
-          unitLabel: document.getElementById('unit-label'),
-          logTableBody: document.getElementById('log-table-body'),
-          paginationDiv: document.getElementById('pagination'),
-          prevPageBtn: document.getElementById('prev-page'),
-          nextPageBtn: document.getElementById('next-page'),
-          pageInfo: document.getElementById('page-info'),
-          
-          insightsContainer: document.getElementById('insights-container'),
-          impactSummary: document.getElementById('impact-summary'),
-          progressFill: document.getElementById('progress-fill')
-        };
-      }
-
-      /**
-       * Binds user event listeners
-       */
-      function bindEvents() {
-        DOM.navBtns.forEach(btn => {
-          btn.addEventListener('click', (e) => {
-            const targetId = e.currentTarget.dataset.target;
-            switchView(targetId);
-            if (targetId === 'dashboard') {
-               updateDashboard();
-            }
-          });
-        });
-
-        DOM.categorySelect.addEventListener('change', (e) => {
-          updateSubcategories(e.target.value);
-        });
-
-        let debounceTimer;
-        DOM.amountInput.addEventListener('input', (e) => {
-          clearTimeout(debounceTimer);
-          debounceTimer = setTimeout(() => {
-            // Live validation check on value
-            const val = parseFloat(e.target.value);
-            if (val < 0) {
-              alert("Amount must be a positive number.");
-            }
-          }, 300);
-        });
-
-        DOM.logForm.addEventListener('submit', async (e) => {
-          e.preventDefault();
-          
-          const formData = {
-            category: DataValidator.sanitizeInput(DOM.categorySelect.value),
-            subcategory: DataValidator.sanitizeInput(DOM.subcategorySelect.value),
-            value: DataValidator.sanitizeInput(DOM.amountInput.value)
-          };
-
-          const validation = DataValidator.validateActivityInput(formData);
-          if (validation.valid) {
-            if (editEntryId) {
-              await AppState.updateEntry(editEntryId, formData);
-              editEntryId = null;
-              DOM.logForm.querySelector('button[type="submit"]').textContent = 'Add Entry';
-            } else {
-              await AppState.addEntry(formData);
-            }
-            DOM.logForm.reset();
-            updateSubcategories(DOM.categorySelect.value);
-            logPage = 0; // Reset to first page
-          } else {
-            alert("Error: " + validation.errors.join(", "));
+    function bindEvents() {
+      document.querySelectorAll('.nav-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+          e.currentTarget.classList.add('active');
+          document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+          document.getElementById(e.currentTarget.dataset.target).classList.add('active');
+          if (e.currentTarget.dataset.target === 'dashboard') {
+            ChartRenderer.render(AppState.getEntries());
           }
         });
+      });
 
-        document.addEventListener('stateChanged', () => {
-          updateDashboard();
-          renderLogTable();
+      const catSelect = document.getElementById('category');
+      const subSelect = document.getElementById('subcategory');
+      if (catSelect && subSelect) {
+        catSelect.addEventListener('change', (e) => {
+          const category = e.target.value;
+          subSelect.innerHTML = '';
+          if (EMISSION_FACTORS[category]) {
+            Object.keys(EMISSION_FACTORS[category]).forEach(sub => {
+              const opt = document.createElement('option');
+              opt.value = sub;
+              opt.textContent = sub.charAt(0).toUpperCase() + sub.slice(1);
+              subSelect.appendChild(opt);
+            });
+          }
+        });
+        catSelect.dispatchEvent(new Event('change'));
+      }
+
+      const logForm = document.getElementById('log-form');
+      if (logForm) {
+        logForm.addEventListener('submit', async (e) => {
+          e.preventDefault();
+          const formData = new FormData(logForm);
+          const data = Object.fromEntries(formData.entries());
+          const validation = DataValidator.validateActivityInput(data);
+          if (!validation.valid) {
+            alert("Validation Error:\n" + validation.errors.join("\n"));
+            return;
+          }
+          await AppState.addEntry(data);
+          logForm.reset();
+          catSelect.dispatchEvent(new Event('change'));
+          alert("Activity logged successfully!");
+        });
+      }
+
+      const btnExport = document.getElementById('btn-export');
+      if (btnExport) btnExport.addEventListener('click', () => AppState.exportData());
+
+      const btnClear = document.getElementById('btn-clear');
+      if (btnClear) btnClear.addEventListener('click', async () => {
+        if (confirm("Are you sure you want to clear all data? This cannot be undone.")) {
+          await AppState.clearAll();
+          alert("All data cleared.");
+        }
+      });
+
+      const prevBtn = document.getElementById('prev-page');
+      const nextBtn = document.getElementById('next-page');
+      if (prevBtn) prevBtn.addEventListener('click', () => { currentPage--; renderLogTable(); });
+      if (nextBtn) nextBtn.addEventListener('click', () => { currentPage++; renderLogTable(); });
+    }
+
+    function renderAll() {
+      renderDashboard();
+      renderLogTable();
+      renderInsights();
+      ChartRenderer.render(AppState.getEntries());
+    }
+
+    function renderDashboard() {
+      const entries = AppState.getEntries();
+      const now = new Date();
+      const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const weekStart = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+
+      let todayTotal = 0, weekTotal = 0, monthTotal = 0, allTotal = 0;
+      entries.forEach(e => {
+        const d = new Date(e.timestamp);
+        const co2 = e.co2_kg;
+        allTotal += co2;
+        if (d >= todayStart) todayTotal += co2;
+        if (d >= weekStart) weekTotal += co2;
+        if (d >= monthStart) monthTotal += co2;
+      });
+
+      document.getElementById('dash-today').textContent = todayTotal.toFixed(1) + ' kg';
+      document.getElementById('dash-week').textContent = weekTotal.toFixed(1) + ' kg';
+      document.getElementById('dash-month').textContent = monthTotal.toFixed(1) + ' kg';
+      document.getElementById('dash-total').textContent = allTotal.toFixed(1) + ' kg';
+    }
+
+    function renderLogTable() {
+      const entries = AppState.getEntries();
+      const totalPages = Math.ceil(entries.length / itemsPerPage) || 1;
+      if (currentPage > totalPages) currentPage = totalPages;
+
+      const tbody = document.getElementById('log-table-body');
+      if (!tbody) return;
+      tbody.innerHTML = '';
+      
+      const frag = document.createDocumentFragment();
+      const start = (currentPage - 1) * itemsPerPage;
+      const pageEntries = entries.slice(start, start + itemsPerPage);
+
+      pageEntries.forEach(entry => {
+        const tr = document.createElement('tr');
+        
+        const tdDate = document.createElement('td');
+        tdDate.textContent = new Date(entry.timestamp).toLocaleDateString();
+        tr.appendChild(tdDate);
+
+        const tdAct = document.createElement('td');
+        tdAct.textContent = `${entry.category.charAt(0).toUpperCase() + entry.category.slice(1)} - ${entry.subcategory.charAt(0).toUpperCase() + entry.subcategory.slice(1)} (${entry.amount})`;
+        tr.appendChild(tdAct);
+
+        const tdCo2 = document.createElement('td');
+        tdCo2.textContent = entry.co2_kg.toFixed(1);
+        tr.appendChild(tdCo2);
+
+        const tdActn = document.createElement('td');
+        const delBtn = document.createElement('button');
+        delBtn.className = 'btn-delete';
+        delBtn.textContent = 'Delete';
+        delBtn.addEventListener('click', () => AppState.deleteEntry(entry.id));
+        tdActn.appendChild(delBtn);
+        tr.appendChild(tdActn);
+
+        frag.appendChild(tr);
+      });
+      tbody.appendChild(frag);
+
+      document.getElementById('page-info').textContent = `Page ${currentPage} of ${totalPages}`;
+      document.getElementById('prev-page').disabled = currentPage === 1;
+      document.getElementById('next-page').disabled = currentPage === totalPages;
+    }
+
+    function renderInsights() {
+      const container = document.getElementById('insights-container');
+      if (!container) return;
+      container.innerHTML = '';
+
+      const entries = AppState.getEntries();
+      const insights = InsightsEngine.generateInsights(entries);
+      const frag = document.createDocumentFragment();
+
+      insights.forEach(ins => {
+        const card = document.createElement('div');
+        card.className = 'card insight-card';
+        
+        const content = document.createElement('div');
+        content.className = 'insight-content';
+        const h3 = document.createElement('h3');
+        const badge = document.createElement('span');
+        badge.className = `badge badge-${ins.difficulty}`;
+        badge.textContent = ins.difficulty.toUpperCase();
+        h3.appendChild(badge);
+        h3.appendChild(document.createTextNode(ins.title));
+        
+        const p = document.createElement('p');
+        p.textContent = ins.desc;
+        content.appendChild(h3);
+        content.appendChild(p);
+        
+        const actn = document.createElement('div');
+        const btn = document.createElement('button');
+        btn.className = 'btn-primary';
+        btn.textContent = 'Adopt Insight';
+        btn.addEventListener('click', () => {
+          AppState.addAdoptedInsight(parseFloat(ins.savings));
+          card.remove();
           renderInsights();
         });
+        actn.appendChild(btn);
 
-        DOM.prevPageBtn.addEventListener('click', () => {
-          if (logPage > 0) {
-            logPage--;
-            renderLogTable();
-          }
-        });
-
-        DOM.nextPageBtn.addEventListener('click', () => {
-          const totalPages = Math.ceil(AppState.getEntries().length / PAGE_SIZE);
-          if (logPage < totalPages - 1) {
-            logPage++;
-            renderLogTable();
-          }
-        });
-        
-        window.addEventListener('resize', () => {
-           if (document.getElementById('dashboard').classList.contains('active')) {
-             ChartRenderer.renderCharts(AppState.getEntries());
-           }
-        });
+        card.appendChild(content);
+        card.appendChild(actn);
+        frag.appendChild(card);
+      });
+      
+      if (insights.length === 0) {
+        const p = document.createElement('p');
+        p.textContent = "Great job! Your recent activities look very efficient. Log more data to get new insights.";
+        p.style.color = 'var(--text-secondary)';
+        frag.appendChild(p);
       }
+      container.appendChild(frag);
 
-      /**
-       * Triggers edit mode for an entry and pre-fills form fields
-       * @param {string} id - Entry ID to edit
-       */
-      function startEditEntry(id) {
-        const entry = AppState.getEntries().find(e => e.id === id);
-        if (!entry) return;
+      const adopted = AppState.getAdoptedInsights();
+      const totalSaved = adopted.reduce((sum, item) => sum + item.co2Saved, 0);
+      const treesEquivalent = Math.floor(totalSaved / 21);
+      
+      const summaryNode = document.getElementById('impact-summary');
+      if (summaryNode) summaryNode.textContent = `You've saved ${totalSaved.toFixed(1)} kg CO₂ equivalent to ${treesEquivalent} trees planted.`;
+      
+      const fill = document.getElementById('progress-fill');
+      if (fill) fill.style.width = Math.min(100, (totalSaved / 100) * 100) + '%';
+    }
 
-        editEntryId = id;
-        DOM.categorySelect.value = entry.category;
-        updateSubcategories(entry.category);
-        DOM.subcategorySelect.value = entry.subcategory;
-        DOM.amountInput.value = entry.value;
+    return { init };
+  })();
 
-        // Change submit button text
-        const submitBtn = DOM.logForm.querySelector('button[type="submit"]');
-        submitBtn.textContent = 'Update Entry';
+  // --- 7. TestRunner ---
+  const TestRunner = (function() {
+    function run() {
+      let passed = 0;
+      let failed = 0;
+      console.groupCollapsed("CarbonTrace Test Suite");
 
-        // Switch view to input form
-        switchView('log');
-      }
-
-      /**
-       * Switches the active view tab
-       * @param {string} viewId - ID of view to activate
-       */
-      function switchView(viewId) {
-        DOM.navBtns.forEach(btn => {
-          if (btn.dataset.target === viewId) btn.classList.add('active');
-          else btn.classList.remove('active');
-        });
-
-        DOM.views.forEach(view => {
-          if (view.id === viewId) view.classList.add('active');
-          else view.classList.remove('active');
-        });
-      }
-
-      /**
-       * Updates the subcategories dropdown based on selected category
-       * @param {string} category - Selected category
-       */
-      function updateSubcategories(category) {
-        DOM.subcategorySelect.innerHTML = '';
-        if (EMISSION_FACTORS[category]) {
-          Object.keys(EMISSION_FACTORS[category]).forEach(sub => {
-            const opt = document.createElement('option');
-            opt.value = sub;
-            opt.textContent = sub.charAt(0).toUpperCase() + sub.slice(1);
-            DOM.subcategorySelect.appendChild(opt);
-          });
-        }
-        
-        const units = {
-          transport: 'km',
-          food: 'kg',
-          energy: 'kWh',
-          shopping: 'items'
-        };
-        DOM.unitLabel.textContent = units[category] || '';
-      }
-
-      /**
-       * Updates the dashboard metrics and charts
-       */
-      function updateDashboard() {
-        const entries = AppState.getEntries();
-        const now = new Date();
-        const todayStr = now.toISOString().split('T')[0];
-        
-        const oneWeekAgo = new Date(now);
-        oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
-        const oneMonthAgo = new Date(now);
-        oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
-
-        // Single O(n) reduce pass over entries
-        const stats = entries.reduce((acc, entry) => {
-          const entryDate = new Date(entry.timestamp);
-          const val = entry.co2_kg;
-          
-          acc.total += val;
-          if (entry.timestamp.startsWith(todayStr)) acc.today += val;
-          if (entryDate >= oneWeekAgo) acc.week += val;
-          if (entryDate >= oneMonthAgo) acc.month += val;
-          
-          acc[entry.category] = (acc[entry.category] || 0) + val;
-          return acc;
-        }, { total: 0, today: 0, week: 0, month: 0, transport: 0, food: 0, energy: 0, shopping: 0 });
-
-        DOM.dashToday.textContent = stats.today.toFixed(1) + ' kg';
-        DOM.dashWeek.textContent = stats.week.toFixed(1) + ' kg';
-        DOM.dashMonth.textContent = stats.month.toFixed(1) + ' kg';
-        DOM.dashTotal.textContent = stats.total.toFixed(1) + ' kg';
-
-        ChartRenderer.renderCharts(entries);
-      }
-
-      /**
-       * Renders the paginated log table programmatically with zero innerHTML calls for safety
-       */
-      function renderLogTable() {
-        const entries = AppState.getEntries();
-        const start = logPage * PAGE_SIZE;
-        const end = start + PAGE_SIZE;
-        const pageEntries = entries.slice(start, end);
-
-        DOM.logTableBody.innerHTML = '';
-        pageEntries.forEach(entry => {
-          const tr = document.createElement('tr');
-          
-          const tdDate = document.createElement('td');
-          tdDate.textContent = new Date(entry.timestamp).toLocaleString();
-          
-          const tdActivity = document.createElement('td');
-          tdActivity.style.textTransform = 'capitalize';
-          tdActivity.textContent = `${entry.category} - ${entry.subcategory} (${entry.value} ${entry.unit})`;
-          
-          const tdCo2 = document.createElement('td');
-          tdCo2.textContent = entry.co2_kg.toFixed(2);
-          
-          const tdActions = document.createElement('td');
-          
-          const btnEdit = document.createElement('button');
-          btnEdit.className = 'btn-edit';
-          btnEdit.setAttribute('aria-label', `Edit entry from ${tdDate.textContent}`);
-          btnEdit.textContent = 'Edit';
-          btnEdit.addEventListener('click', () => startEditEntry(entry.id));
-          
-          const btnDelete = document.createElement('button');
-          btnDelete.className = 'btn-delete';
-          btnDelete.setAttribute('aria-label', `Delete entry from ${tdDate.textContent}`);
-          btnDelete.textContent = 'Delete';
-          btnDelete.addEventListener('click', async () => {
-            await AppState.deleteEntry(entry.id);
-            const totalPages = Math.ceil(AppState.getEntries().length / PAGE_SIZE) || 1;
-            if (logPage >= totalPages) logPage = Math.max(0, totalPages - 1);
-            renderLogTable();
-          });
-          
-          tdActions.appendChild(btnEdit);
-          tdActions.appendChild(btnDelete);
-          
-          tr.appendChild(tdDate);
-          tr.appendChild(tdActivity);
-          tr.appendChild(tdCo2);
-          tr.appendChild(tdActions);
-          
-          DOM.logTableBody.appendChild(tr);
-        });
-
-        // Update pagination UI
-        const totalPages = Math.ceil(entries.length / PAGE_SIZE) || 1;
-        DOM.pageInfo.textContent = `Page ${logPage + 1} of ${totalPages}`;
-        DOM.prevPageBtn.disabled = logPage === 0;
-        DOM.nextPageBtn.disabled = logPage >= totalPages - 1;
-      }
-
-      /**
-       * Renders the insights and progress section programmatically with zero innerHTML calls for safety
-       */
-      function renderInsights() {
-        const entries = AppState.getEntries();
-        const insights = InsightsEngine.generateInsights(entries);
-        const adopted = AppState.getAdoptedInsights();
-        const adoptedIds = adopted.map(i => i.id);
-        
-        DOM.insightsContainer.innerHTML = '';
-        if (insights.length === 0) {
-          const p = document.createElement('p');
-          p.style.color = 'var(--text-secondary)';
-          p.textContent = 'No new insights right now. Keep logging activities!';
-          DOM.insightsContainer.appendChild(p);
+      function assert(condition, message) {
+        if (condition) {
+          console.log(`✓ ${message}`);
+          passed++;
         } else {
-          insights.forEach(ins => {
-            const isAdopted = adoptedIds.includes(ins.id);
-            
-            const div = document.createElement('div');
-            div.className = 'card insight-card';
-            if (isAdopted) {
-              div.style.borderLeftColor = 'var(--secondary)';
-              div.style.backgroundColor = '#f1fcf6';
-            }
-            
-            const divContent = document.createElement('div');
-            divContent.className = 'insight-content';
-            
-            const h3 = document.createElement('h3');
-            
-            const checkSpan = document.createElement('span');
-            checkSpan.style.marginRight = '8px';
-            checkSpan.style.fontSize = '18px';
-            checkSpan.textContent = isAdopted ? '✅' : '⬜';
-            h3.appendChild(checkSpan);
-
-            const badge = document.createElement('span');
-            badge.className = `badge ${ins.difficultyClass}`;
-            badge.textContent = ins.difficulty.toUpperCase();
-            h3.appendChild(badge);
-            
-            const titleNode = document.createTextNode(` ${ins.title}`);
-            h3.appendChild(titleNode);
-            
-            const pDesc = document.createElement('p');
-            pDesc.textContent = ins.desc;
-            if (isAdopted) {
-              pDesc.style.textDecoration = 'line-through';
-              pDesc.style.color = 'var(--text-secondary)';
-            }
-            
-            const pSavings = document.createElement('p');
-            const smallSavings = document.createElement('small');
-            smallSavings.style.fontWeight = '500';
-            smallSavings.textContent = `Potential savings: ~${ins.savings} kg CO₂/year`;
-            pSavings.appendChild(smallSavings);
-            
-            divContent.appendChild(h3);
-            divContent.appendChild(pDesc);
-            divContent.appendChild(pSavings);
-            
-            const btnAdopt = document.createElement('button');
-            if (isAdopted) {
-              btnAdopt.className = 'btn-primary';
-              btnAdopt.style.backgroundColor = 'var(--secondary)';
-              btnAdopt.textContent = 'Adopted';
-              btnAdopt.disabled = true;
-              btnAdopt.style.cursor = 'default';
-            } else {
-              btnAdopt.className = 'btn-primary';
-              btnAdopt.textContent = 'Mark as Adopted';
-              btnAdopt.addEventListener('click', async () => {
-                await AppState.markInsightAdopted(ins.id, ins.savings);
-                renderInsights();
-              });
-            }
-            
-            div.appendChild(divContent);
-            div.appendChild(btnAdopt);
-            DOM.insightsContainer.appendChild(div);
-          });
-        }
-
-        // Update impact summary
-        const totalSaved = adopted.reduce((sum, item) => sum + item.co2Saved, 0);
-        const treesEquivalent = Math.floor(totalSaved / 21); // Roughly 21kg CO2 per tree per year
-        
-        DOM.impactSummary.innerHTML = '';
-        DOM.impactSummary.appendChild(document.createTextNode("You've saved "));
-        const strongSaved = document.createElement('strong');
-        strongSaved.textContent = `${totalSaved} kg CO₂`;
-        DOM.impactSummary.appendChild(strongSaved);
-        DOM.impactSummary.appendChild(document.createTextNode(" equivalent to "));
-        const strongTrees = document.createElement('strong');
-        strongTrees.textContent = `${treesEquivalent} trees`;
-        DOM.impactSummary.appendChild(strongTrees);
-        DOM.impactSummary.appendChild(document.createTextNode(" planted."));
-        
-        // Scale progress assuming 5000kg is a large goal
-        const progressPct = Math.min(100, (totalSaved / 5000) * 100);
-        DOM.progressFill.style.width = `${progressPct}%`;
-      }
-
-      /**
-       * Initializes UI Controller
-       */
-      function init() {
-        cacheDOM();
-        bindEvents();
-        updateSubcategories('transport');
-        updateDashboard();
-        renderLogTable();
-        renderInsights();
-      }
-
-      return { init };
-    })();
-
-    // --- 7. TestRunner ---
-    const TestRunner = (function() {
-      /**
-       * Runs all unit tests and registers results globally
-       */
-      function run() {
-        const results = [];
-        let passed = 0;
-        let failed = 0;
-
-        function assert(name, condition) {
-          const success = !!condition;
-          if (success) passed++; else failed++;
-          results.push({ name, success });
-        }
-
-        try {
-          // Test 1: Transport emissions (car)
-          const transportCo2 = EmissionsCalculator.calculateTransportEmissions('car', 100);
-          assert("calculateTransportEmissions('car', 100) should return 21", Math.abs(transportCo2 - 21) < 0.001);
-
-          // Test 2: Transport emissions (bike)
-          const bikeCo2 = EmissionsCalculator.calculateTransportEmissions('bike', 50);
-          assert("calculateTransportEmissions('bike', 50) should return 0", bikeCo2 === 0);
-
-          // Test 3: Food emissions (beef)
-          const foodCo2 = EmissionsCalculator.calculateFoodEmissions('beef', 0.5);
-          assert("calculateFoodEmissions('beef', 0.5) should return 13.5", Math.abs(foodCo2 - 13.5) < 0.001);
-
-          // Test 4: Validation bounds (negative check)
-          const valInvalid = DataValidator.validateActivityInput({ category: 'transport', subcategory: 'car', value: -1 });
-          assert("validateActivityInput({category:'transport', value:-1}) should return invalid", !valInvalid.valid);
-
-          // Test 5: Validation bounds (valid data check)
-          const valValid = DataValidator.validateActivityInput({ category: 'transport', subcategory: 'car', value: 100 });
-          assert("validateActivityInput(valid data) should return valid", valValid.valid);
-
-          // Test 6: AppState date range filter
-          const start = new Date("2026-01-01");
-          const end = new Date("2026-12-31");
-          const rangeEntries = AppState.getEntriesByDateRange(start, end);
-          assert("getEntriesByDateRange returns an array", Array.isArray(rangeEntries));
-
-        } catch (err) {
+          console.error(`✗ ${message}`);
           failed++;
-          results.push({ name: "Exception during test suite run: " + err.message, success: false });
-        }
-
-        const testResults = {
-          passed,
-          failed,
-          total: passed + failed,
-          details: results
-        };
-
-        window.testResults = testResults;
-
-        // Log results
-        console.groupCollapsed(`CarbonTrace Test Suite: ${passed}/${passed + failed} Passed`);
-        results.forEach(r => {
-          console.log(`${r.success ? '✓' : '✗'} ${r.name}`);
-        });
-        console.groupEnd();
-
-        // Update status label in UI
-        const testPill = document.getElementById('test-status-pill');
-        if (testPill) {
-          testPill.textContent = `${passed}/${passed + failed} Passed`;
-          testPill.style.color = failed > 0 ? 'var(--danger)' : 'var(--primary)';
-          testPill.style.fontWeight = '600';
         }
       }
 
-      return { run };
-    })();
+      try {
+        // Validation tests
+        assert(DataValidator.validateActivityInput({category:'transport', subcategory:'flight', value:'10'}).valid === true, "Valid input is valid");
+        assert(DataValidator.validateActivityInput({category:'transport', subcategory:'flight', value:'-1'}).valid === false, "Negative input is invalid");
+        assert(DataValidator.validateActivityInput({category:'invalid', subcategory:'flight', value:'10'}).valid === false, "Invalid category rejected");
+        assert(DataValidator.validateActivityInput({category:'transport', subcategory:'invalid', value:'10'}).valid === false, "Invalid subcategory rejected");
+        assert(DataValidator.validateActivityInput({category:'transport', subcategory:'flight', value:'999999999'}).valid === false, "Extremely large value rejected");
 
-    // --- Bootstrapping ---
-    document.addEventListener('DOMContentLoaded', async () => {
-      await AppState.init();
-      UIController.init();
-      TestRunner.run();
-    });
-  </script>
+        // Calculator tests
+        assert(EmissionsCalculator.calculateTransportEmissions('car', 100) === 21, "100km car = 21kg CO2");
+        assert(EmissionsCalculator.calculateTransportEmissions('bike', 50) === 0, "50km bike = 0kg CO2");
+        assert(EmissionsCalculator.calculateFoodEmissions('beef', 0.5) === 13.5, "0.5kg beef = 13.5kg CO2");
+        assert(EmissionsCalculator.calculateEmissions('energy', 'electricity', 100) === 23.3, "100kWh electricity = 23.3kg");
+        assert(EmissionsCalculator.calculateEmissions('invalid', 'xyz', 100) === 0, "Invalid calculation returns 0");
+
+        // State testing
+        const initialEntries = AppState.getEntries().length;
+        AppState._setEntriesForTest([{category:'transport', subcategory:'flight', amount:1000, co2_kg: 255}]);
+        assert(AppState.getEntries().length === 1, "Mock State injection works");
+
+        // Insights testing
+        const mockEntries = [
+          { category: 'food', co2_kg: 30 },
+          { category: 'transport', co2_kg: 60 }
+        ];
+        const insights = InsightsEngine.generateInsights(mockEntries);
+        assert(insights.length >= 2, "Insights generated accurately for high values");
+        assert(insights.find(i => i.title.includes('Beef')) !== undefined, "Beef insight present");
+        
+        // Reset state
+        AppState._setEntriesForTest([]);
+        
+      } catch (e) {
+        console.error("Test execution failed:", e);
+        failed++;
+      }
+
+      console.groupEnd();
+      
+      const testPill = document.getElementById('test-status-pill');
+      if (testPill) {
+        testPill.textContent = `${passed}/${passed + failed} Passed`;
+        testPill.style.color = failed > 0 ? 'var(--danger)' : 'var(--primary)';
+        testPill.style.fontWeight = '600';
+      }
+    }
+
+    return { run };
+  })();
+
+  // --- Bootstrapping ---
+  document.addEventListener('DOMContentLoaded', async () => {
+    await AppState.init();
+    UIController.init();
+    TestRunner.run();
+  });
+
+})();
+
+</script>
 </body>
 </html>
