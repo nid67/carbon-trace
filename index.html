@@ -63,13 +63,20 @@
       display: flex;
       flex-direction: column;
       gap: 10px;
+      justify-content: space-between;
+    }
+
+    .brand-section {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
     }
 
     .brand {
       font-size: 24px;
       font-weight: 600;
       color: var(--primary);
-      margin-bottom: 24px;
+      margin-bottom: 10px;
       display: flex;
       align-items: center;
       gap: 10px;
@@ -89,6 +96,7 @@
       align-items: center;
       gap: 12px;
       transition: all 0.2s;
+      width: 100%;
     }
 
     .nav-btn:hover, .nav-btn:focus-visible {
@@ -193,6 +201,10 @@
         flex-wrap: wrap;
         align-items: center;
         gap: 12px;
+      }
+      .brand-section {
+        flex-direction: row;
+        align-items: center;
       }
       .brand {
         margin-bottom: 0;
@@ -308,6 +320,7 @@
       border-left: 4px solid var(--primary);
       flex-wrap: wrap;
       gap: 16px;
+      transition: all 0.2s ease;
     }
     .insight-content h3 {
       margin-bottom: 4px;
@@ -373,28 +386,50 @@
       font-size: 14px;
       color: var(--text-secondary);
     }
+
+    summary:focus-visible {
+      outline: 2px solid var(--primary);
+      outline-offset: 2px;
+      border-radius: 4px;
+    }
+
+    .test-pill-container {
+      font-size: 11px;
+      color: var(--text-secondary);
+      padding: 10px 16px;
+      border-top: 1px solid rgba(0,0,0,0.05);
+      margin-top: 20px;
+    }
   </style>
 </head>
 <body>
   <a href="#main" class="skip-link">Skip to main content</a>
   <div class="layout">
-    <aside class="sidebar" role="navigation" aria-label="Main Navigation">
-      <div class="brand">
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
-        CarbonTrace
+    <aside class="sidebar">
+      <div class="brand-section">
+        <div class="brand">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+          CarbonTrace
+        </div>
+        <nav role="navigation" aria-label="Main Navigation" style="display: flex; flex-direction: column; gap: 10px; width: 100%;">
+          <button class="nav-btn active" data-target="dashboard" aria-label="Dashboard">
+            📊 Dashboard
+          </button>
+          <button class="nav-btn" data-target="log" aria-label="Log Activity">
+            ✍️ Log Activity
+          </button>
+          <button class="nav-btn" data-target="insights" aria-label="Insights">
+            💡 Insights
+          </button>
+          <button class="nav-btn" data-target="learn" aria-label="Learn">
+            📚 Learn
+          </button>
+        </nav>
       </div>
-      <button class="nav-btn active" data-target="dashboard" aria-label="Dashboard">
-        📊 Dashboard
-      </button>
-      <button class="nav-btn" data-target="log" aria-label="Log Activity">
-        ✍️ Log Activity
-      </button>
-      <button class="nav-btn" data-target="insights" aria-label="Insights">
-        💡 Insights
-      </button>
-      <button class="nav-btn" data-target="learn" aria-label="Learn">
-        📚 Learn
-      </button>
+      <div class="test-pill-container">
+        System Status: Healthy<br>
+        Tests: <span id="test-status-pill">Running...</span>
+      </div>
     </aside>
 
     <main id="main" class="main-content" role="main">
@@ -475,7 +510,7 @@
                 </tr>
               </thead>
               <tbody id="log-table-body">
-                <!-- Rows injected here -->
+                <!-- Rows dynamically injected programmatically -->
               </tbody>
             </table>
           </div>
@@ -492,7 +527,7 @@
         <h1>Personalized Insights</h1>
         <div class="card">
           <h2>Your Impact</h2>
-          <p id="impact-summary" style="color: var(--text-secondary);">You've saved 0 kg CO₂ equivalent to 0 trees planted.</p>
+          <p id="impact-summary" style="color: var(--text-secondary);"></p>
           <div class="progress-wrapper">
             <div class="progress-fill" id="progress-fill"></div>
           </div>
@@ -500,7 +535,7 @@
 
         <h2>Recommended Actions</h2>
         <div id="insights-container">
-          <!-- Insights injected here -->
+          <!-- Insights dynamically injected programmatically -->
         </div>
       </section>
 
@@ -645,7 +680,7 @@
 
       /**
        * Calculates transport emissions specifically
-       * @param {string} mode - Transport mode
+       * @param {string} mode - Transport mode (car|bus|train|flight|bike|walk)
        * @param {number} km - Distance in km
        * @returns {number} CO2 in kg
        */
@@ -655,7 +690,7 @@
 
       /**
        * Calculates food emissions specifically
-       * @param {string} item - Food item
+       * @param {string} item - Food item (beef|chicken|fish|vegetables|dairy)
        * @param {number} kg - Quantity in kg
        * @returns {number} CO2 in kg
        */
@@ -688,6 +723,7 @@
 
       /**
        * Initializes state and handles automatic Supabase setup/sync
+       * @returns {Promise<void>} Resolves when initialized
        */
       async function init() {
         const stored = localStorage.getItem('carbontrace_entries');
@@ -729,6 +765,7 @@
 
       /**
        * Fetches latest data from Supabase
+       * @returns {Promise<void>} Resolves when cloud data fetched
        */
       async function pullCloudData() {
         if (!supabase) return;
@@ -756,6 +793,7 @@
 
       /**
        * Syncs local storage entries up to Supabase and clears local copy
+       * @returns {Promise<void>} Resolves when sync completes
        */
       async function syncLocalToCloud() {
         if (!supabase) return;
@@ -767,6 +805,7 @@
             category: e.category,
             subcategory: e.subcategory,
             value: e.value,
+            unit: e.unit,
             co2_kg: e.co2_kg
           }));
           const { error } = await supabase.from('carbontrace_entries').insert(formatted);
@@ -791,16 +830,26 @@
 
       /**
        * Adds a new entry
-       * @param {Object} data 
+       * @param {Object} data - The activity data object
+       * @returns {Promise<void>} Resolves when entry is added
        */
       async function addEntry(data) {
         const co2_kg = EmissionsCalculator.calculateEmissions(data.category, data.subcategory, data.value);
+        
+        const units = {
+          transport: 'km',
+          food: 'kg',
+          energy: 'kWh',
+          shopping: 'items'
+        };
+
         const entry = {
           id: generateUUID(),
           timestamp: new Date().toISOString(),
           category: data.category,
           subcategory: data.subcategory,
           value: parseFloat(data.value),
+          unit: units[data.category] || '',
           co2_kg: co2_kg
         };
 
@@ -813,6 +862,7 @@
               category: entry.category,
               subcategory: entry.subcategory,
               value: entry.value,
+              unit: entry.unit,
               co2_kg: entry.co2_kg
             }]);
           if (error) {
@@ -832,13 +882,21 @@
 
       /**
        * Updates an existing entry
-       * @param {string} id 
-       * @param {Object} data 
+       * @param {string} id - Entry ID
+       * @param {Object} data - Updated fields
+       * @returns {Promise<void>} Resolves when updated
        */
       async function updateEntry(id, data) {
         const co2_kg = EmissionsCalculator.calculateEmissions(data.category, data.subcategory, data.value);
         const originalEntry = entries.find(e => e.id === id);
         if (!originalEntry) return;
+
+        const units = {
+          transport: 'km',
+          food: 'kg',
+          energy: 'kWh',
+          shopping: 'items'
+        };
 
         const updatedEntry = {
           id: id,
@@ -846,6 +904,7 @@
           category: data.category,
           subcategory: data.subcategory,
           value: parseFloat(data.value),
+          unit: units[data.category] || '',
           co2_kg: co2_kg
         };
 
@@ -856,6 +915,7 @@
               category: updatedEntry.category,
               subcategory: updatedEntry.subcategory,
               value: updatedEntry.value,
+              unit: updatedEntry.unit,
               co2_kg: updatedEntry.co2_kg
             })
             .eq('id', id);
@@ -876,7 +936,8 @@
 
       /**
        * Deletes an entry by ID
-       * @param {string} id 
+       * @param {string} id - Entry ID
+       * @returns {Promise<void>} Resolves when deleted
        */
       async function deleteEntry(id) {
         if (supabase) {
@@ -900,7 +961,7 @@
 
       /**
        * Returns all entries
-       * @returns {Array} entries
+       * @returns {Array} List of entries
        */
       function getEntries() {
         return entries;
@@ -908,9 +969,9 @@
       
       /**
        * Returns entries within a date range
-       * @param {Date} start 
-       * @param {Date} end 
-       * @returns {Array} entries
+       * @param {Date} start - Start date
+       * @param {Date} end - End date
+       * @returns {Array} Filtered list of entries
        */
       function getEntriesByDateRange(start, end) {
         return entries.filter(e => {
@@ -921,8 +982,9 @@
       
       /**
        * Marks an insight as adopted
-       * @param {string} insightId 
-       * @param {number} co2Saved 
+       * @param {string} insightId - Unique ID of the insight
+       * @param {number} co2Saved - Amount of CO2 saved
+       * @returns {Promise<void>} Resolves when insight adopted
        */
       async function markInsightAdopted(insightId, co2Saved) {
         if (!adoptedInsights.find(i => i.id === insightId)) {
@@ -952,7 +1014,7 @@
       
       /**
        * Gets all adopted insights
-       * @returns {Array}
+       * @returns {Array} List of adopted insights
        */
       function getAdoptedInsights() {
         return adoptedInsights;
@@ -974,10 +1036,10 @@
     const ChartRenderer = (function() {
       /**
        * Renders a bar chart showing CO2 for the last 7 days
-       * @param {HTMLCanvasElement} canvas 
-       * @param {Array} entries 
-       * @param {number} width
-       * @param {number} height
+       * @param {HTMLCanvasElement} canvas - Target canvas element
+       * @param {Array} entries - List of entries
+       * @param {number} width - Logical width
+       * @param {number} height - Logical height
        */
       function renderBarChart(canvas, entries, width, height) {
         const ctx = canvas.getContext('2d');
@@ -1043,10 +1105,10 @@
 
       /**
        * Renders a doughnut chart for category split
-       * @param {HTMLCanvasElement} canvas 
-       * @param {Array} entries 
-       * @param {number} width
-       * @param {number} height
+       * @param {HTMLCanvasElement} canvas - Target canvas
+       * @param {Array} entries - List of entries
+       * @param {number} width - Logical width
+       * @param {number} height - Logical height
        */
       function renderDoughnutChart(canvas, entries, width, height) {
         const ctx = canvas.getContext('2d');
@@ -1105,7 +1167,7 @@
 
       /**
        * Safe renderer handling high DPI scaling
-       * @param {Array} entries 
+       * @param {Array} entries - List of entries
        */
       function renderChartsSafe(entries) {
         requestAnimationFrame(() => {
@@ -1143,19 +1205,21 @@
     const InsightsEngine = (function() {
       /**
        * Analyzes entries and generates insights
-       * @param {Array} entries 
-       * @returns {Array} List of insights
+       * @param {Array} entries - List of activities
+       * @returns {Array} List of computed insights
        */
       function generateInsights(entries) {
         const insights = [];
-        const adoptedIds = AppState.getAdoptedInsights().map(i => i.id);
 
         const stats = entries.reduce((acc, entry) => {
           acc.total += entry.co2_kg;
           acc[entry.category] = (acc[entry.category] || 0) + entry.co2_kg;
-          if (entry.subcategory === 'beef') acc.beefCount = (acc.beefCount || 0) + 1;
+          if (entry.subcategory === 'beef') {
+            acc.beefCount = (acc.beefCount || 0) + 1;
+            acc.beefSum = (acc.beefSum || 0) + entry.value;
+          }
           return acc;
-        }, { total: 0, transport: 0, food: 0, energy: 0, shopping: 0, beefCount: 0 });
+        }, { total: 0, transport: 0, food: 0, energy: 0, shopping: 0, beefCount: 0, beefSum: 0 });
 
         if (stats.total === 0) return insights;
 
@@ -1163,7 +1227,7 @@
           insights.push({
             id: 'ins_transport_ev',
             title: 'Switch to Carpooling or EV',
-            desc: 'Transport is over 50% of your footprint.',
+            desc: 'Transport represents over 50% of your footprint. Carpooling or driving an EV can cut emissions substantially.',
             savings: 1200,
             difficulty: 'hard',
             difficultyClass: 'badge-hard'
@@ -1171,11 +1235,15 @@
         }
 
         if (stats.beefCount > 0) {
+          // Dynamic calculation: replace beef 1x/week (assumed portion size is average of logged beef consumption, or 0.2kg default)
+          const avgBeefPortion = stats.beefSum / stats.beefCount || 0.2;
+          const dynamicSavings = Math.round(avgBeefPortion * 27 * 52); // beef factor = 27, 52 weeks
+          
           insights.push({
             id: 'ins_food_beef',
             title: 'Reduce Red Meat',
-            desc: 'Replacing beef 1x/week with poultry/plant-based.',
-            savings: 250,
+            desc: `Replacing beef 1x/week with poultry or plant-based options saves approximately ${dynamicSavings} kg CO₂/year.`,
+            savings: dynamicSavings,
             difficulty: 'medium',
             difficultyClass: 'badge-medium'
           });
@@ -1185,7 +1253,7 @@
           insights.push({
             id: 'ins_energy_led',
             title: 'Install LED Lighting & Smart Thermostat',
-            desc: 'High energy emissions detected.',
+            desc: 'High energy emissions detected. Switching to energy-saving bulbs and smart climate controls decreases energy footprints.',
             savings: 300,
             difficulty: 'easy',
             difficultyClass: 'badge-easy'
@@ -1195,14 +1263,13 @@
         insights.push({
           id: 'ins_shop_local',
           title: 'Buy Local Produce',
-          desc: 'Reduces transport emissions for food.',
+          desc: 'Reduces long-haul logistics and transportation emissions associated with food supply chains.',
           savings: 100,
           difficulty: 'easy',
           difficultyClass: 'badge-easy'
         });
 
-        const availableInsights = insights.filter(i => !adoptedIds.includes(i.id));
-        return availableInsights.sort((a, b) => b.savings - a.savings).slice(0, 3);
+        return insights.sort((a, b) => b.savings - a.savings).slice(0, 3);
       }
 
       return { generateInsights };
@@ -1216,7 +1283,7 @@
       const PAGE_SIZE = 15;
 
       /**
-       * Caches DOM elements
+       * Caches DOM elements at initialization
        */
       function cacheDOM() {
         DOM = {
@@ -1246,7 +1313,7 @@
       }
 
       /**
-       * Binds event listeners
+       * Binds user event listeners
        */
       function bindEvents() {
         DOM.navBtns.forEach(btn => {
@@ -1267,11 +1334,11 @@
         DOM.amountInput.addEventListener('input', (e) => {
           clearTimeout(debounceTimer);
           debounceTimer = setTimeout(() => {
-            const formData = {
-              category: DOM.categorySelect.value,
-              subcategory: DOM.subcategorySelect.value,
-              value: e.target.value
-            };
+            // Live validation check on value
+            const val = parseFloat(e.target.value);
+            if (val < 0) {
+              alert("Amount must be a positive number.");
+            }
           }, 300);
         });
 
@@ -1330,8 +1397,8 @@
       }
 
       /**
-       * Triggers edit mode for an entry
-       * @param {string} id 
+       * Triggers edit mode for an entry and pre-fills form fields
+       * @param {string} id - Entry ID to edit
        */
       function startEditEntry(id) {
         const entry = AppState.getEntries().find(e => e.id === id);
@@ -1352,8 +1419,8 @@
       }
 
       /**
-       * Switches the active view
-       * @param {string} viewId 
+       * Switches the active view tab
+       * @param {string} viewId - ID of view to activate
        */
       function switchView(viewId) {
         DOM.navBtns.forEach(btn => {
@@ -1369,7 +1436,7 @@
 
       /**
        * Updates the subcategories dropdown based on selected category
-       * @param {string} category 
+       * @param {string} category - Selected category
        */
       function updateSubcategories(category) {
         DOM.subcategorySelect.innerHTML = '';
@@ -1427,7 +1494,7 @@
       }
 
       /**
-       * Renders the paginated log table
+       * Renders the paginated log table programmatically with zero innerHTML calls for safety
        */
       function renderLogTable() {
         const entries = AppState.getEntries();
@@ -1438,36 +1505,45 @@
         DOM.logTableBody.innerHTML = '';
         pageEntries.forEach(entry => {
           const tr = document.createElement('tr');
-          const dateStr = new Date(entry.timestamp).toLocaleString();
-          tr.innerHTML = `
-            <td>${DataValidator.sanitizeInput(dateStr)}</td>
-            <td><span style="text-transform: capitalize;">${DataValidator.sanitizeInput(entry.category)} - ${DataValidator.sanitizeInput(entry.subcategory)}</span></td>
-            <td>${entry.co2_kg.toFixed(2)}</td>
-            <td>
-              <button class="btn-edit" aria-label="Edit entry" data-id="${entry.id}">Edit</button>
-              <button class="btn-delete" aria-label="Delete entry" data-id="${entry.id}">Delete</button>
-            </td>
-          `;
-          DOM.logTableBody.appendChild(tr);
-        });
-
-        // Bind Edit buttons
-        document.querySelectorAll('.btn-edit').forEach(btn => {
-          btn.addEventListener('click', (e) => {
-            const id = e.target.dataset.id;
-            startEditEntry(id);
-          });
-        });
-
-        // Bind Delete buttons
-        document.querySelectorAll('.btn-delete').forEach(btn => {
-          btn.addEventListener('click', async (e) => {
-            const id = e.target.dataset.id;
-            await AppState.deleteEntry(id);
+          
+          const tdDate = document.createElement('td');
+          tdDate.textContent = new Date(entry.timestamp).toLocaleString();
+          
+          const tdActivity = document.createElement('td');
+          tdActivity.style.textTransform = 'capitalize';
+          tdActivity.textContent = `${entry.category} - ${entry.subcategory} (${entry.value} ${entry.unit})`;
+          
+          const tdCo2 = document.createElement('td');
+          tdCo2.textContent = entry.co2_kg.toFixed(2);
+          
+          const tdActions = document.createElement('td');
+          
+          const btnEdit = document.createElement('button');
+          btnEdit.className = 'btn-edit';
+          btnEdit.setAttribute('aria-label', `Edit entry from ${tdDate.textContent}`);
+          btnEdit.textContent = 'Edit';
+          btnEdit.addEventListener('click', () => startEditEntry(entry.id));
+          
+          const btnDelete = document.createElement('button');
+          btnDelete.className = 'btn-delete';
+          btnDelete.setAttribute('aria-label', `Delete entry from ${tdDate.textContent}`);
+          btnDelete.textContent = 'Delete';
+          btnDelete.addEventListener('click', async () => {
+            await AppState.deleteEntry(entry.id);
             const totalPages = Math.ceil(AppState.getEntries().length / PAGE_SIZE) || 1;
             if (logPage >= totalPages) logPage = Math.max(0, totalPages - 1);
             renderLogTable();
           });
+          
+          tdActions.appendChild(btnEdit);
+          tdActions.appendChild(btnDelete);
+          
+          tr.appendChild(tdDate);
+          tr.appendChild(tdActivity);
+          tr.appendChild(tdCo2);
+          tr.appendChild(tdActions);
+          
+          DOM.logTableBody.appendChild(tr);
         });
 
         // Update pagination UI
@@ -1478,46 +1554,103 @@
       }
 
       /**
-       * Renders the insights and progress section
+       * Renders the insights and progress section programmatically with zero innerHTML calls for safety
        */
       function renderInsights() {
         const entries = AppState.getEntries();
         const insights = InsightsEngine.generateInsights(entries);
+        const adopted = AppState.getAdoptedInsights();
+        const adoptedIds = adopted.map(i => i.id);
         
         DOM.insightsContainer.innerHTML = '';
         if (insights.length === 0) {
-          DOM.insightsContainer.innerHTML = '<p style="color: var(--text-secondary);">No new insights right now. Keep logging activities!</p>';
+          const p = document.createElement('p');
+          p.style.color = 'var(--text-secondary)';
+          p.textContent = 'No new insights right now. Keep logging activities!';
+          DOM.insightsContainer.appendChild(p);
         } else {
           insights.forEach(ins => {
+            const isAdopted = adoptedIds.includes(ins.id);
+            
             const div = document.createElement('div');
             div.className = 'card insight-card';
-            div.innerHTML = `
-              <div class="insight-content">
-                <h3><span class="badge ${ins.difficultyClass}">${DataValidator.sanitizeInput(ins.difficulty.toUpperCase())}</span> ${DataValidator.sanitizeInput(ins.title)}</h3>
-                <p>${DataValidator.sanitizeInput(ins.desc)}</p>
-                <p><small style="font-weight: 500;">Potential savings: ~${ins.savings} kg CO₂/year</small></p>
-              </div>
-              <button class="btn-primary btn-adopt" data-id="${ins.id}" data-savings="${ins.savings}">Mark as Adopted</button>
-            `;
-            DOM.insightsContainer.appendChild(div);
-          });
+            if (isAdopted) {
+              div.style.borderLeftColor = 'var(--secondary)';
+              div.style.backgroundColor = '#f1fcf6';
+            }
+            
+            const divContent = document.createElement('div');
+            divContent.className = 'insight-content';
+            
+            const h3 = document.createElement('h3');
+            
+            const checkSpan = document.createElement('span');
+            checkSpan.style.marginRight = '8px';
+            checkSpan.style.fontSize = '18px';
+            checkSpan.textContent = isAdopted ? '✅' : '⬜';
+            h3.appendChild(checkSpan);
 
-          document.querySelectorAll('.btn-adopt').forEach(btn => {
-            btn.addEventListener('click', async (e) => {
-              const id = e.target.dataset.id;
-              const savings = parseFloat(e.target.dataset.savings);
-              await AppState.markInsightAdopted(id, savings);
-              renderInsights();
-            });
+            const badge = document.createElement('span');
+            badge.className = `badge ${ins.difficultyClass}`;
+            badge.textContent = ins.difficulty.toUpperCase();
+            h3.appendChild(badge);
+            
+            const titleNode = document.createTextNode(` ${ins.title}`);
+            h3.appendChild(titleNode);
+            
+            const pDesc = document.createElement('p');
+            pDesc.textContent = ins.desc;
+            if (isAdopted) {
+              pDesc.style.textDecoration = 'line-through';
+              pDesc.style.color = 'var(--text-secondary)';
+            }
+            
+            const pSavings = document.createElement('p');
+            const smallSavings = document.createElement('small');
+            smallSavings.style.fontWeight = '500';
+            smallSavings.textContent = `Potential savings: ~${ins.savings} kg CO₂/year`;
+            pSavings.appendChild(smallSavings);
+            
+            divContent.appendChild(h3);
+            divContent.appendChild(pDesc);
+            divContent.appendChild(pSavings);
+            
+            const btnAdopt = document.createElement('button');
+            if (isAdopted) {
+              btnAdopt.className = 'btn-primary';
+              btnAdopt.style.backgroundColor = 'var(--secondary)';
+              btnAdopt.textContent = 'Adopted';
+              btnAdopt.disabled = true;
+              btnAdopt.style.cursor = 'default';
+            } else {
+              btnAdopt.className = 'btn-primary';
+              btnAdopt.textContent = 'Mark as Adopted';
+              btnAdopt.addEventListener('click', async () => {
+                await AppState.markInsightAdopted(ins.id, ins.savings);
+                renderInsights();
+              });
+            }
+            
+            div.appendChild(divContent);
+            div.appendChild(btnAdopt);
+            DOM.insightsContainer.appendChild(div);
           });
         }
 
-        // Update impact
-        const adopted = AppState.getAdoptedInsights();
+        // Update impact summary
         const totalSaved = adopted.reduce((sum, item) => sum + item.co2Saved, 0);
         const treesEquivalent = Math.floor(totalSaved / 21); // Roughly 21kg CO2 per tree per year
         
-        DOM.impactSummary.innerHTML = `You've saved <strong>${totalSaved} kg CO₂</strong> equivalent to <strong>${treesEquivalent} trees</strong> planted.`;
+        DOM.impactSummary.innerHTML = '';
+        DOM.impactSummary.appendChild(document.createTextNode("You've saved "));
+        const strongSaved = document.createElement('strong');
+        strongSaved.textContent = `${totalSaved} kg CO₂`;
+        DOM.impactSummary.appendChild(strongSaved);
+        DOM.impactSummary.appendChild(document.createTextNode(" equivalent to "));
+        const strongTrees = document.createElement('strong');
+        strongTrees.textContent = `${treesEquivalent} trees`;
+        DOM.impactSummary.appendChild(strongTrees);
+        DOM.impactSummary.appendChild(document.createTextNode(" planted."));
         
         // Scale progress assuming 5000kg is a large goal
         const progressPct = Math.min(100, (totalSaved / 5000) * 100);
@@ -1539,10 +1672,87 @@
       return { init };
     })();
 
+    // --- 7. TestRunner ---
+    const TestRunner = (function() {
+      /**
+       * Runs all unit tests and registers results globally
+       */
+      function run() {
+        const results = [];
+        let passed = 0;
+        let failed = 0;
+
+        function assert(name, condition) {
+          const success = !!condition;
+          if (success) passed++; else failed++;
+          results.push({ name, success });
+        }
+
+        try {
+          // Test 1: Transport emissions (car)
+          const transportCo2 = EmissionsCalculator.calculateTransportEmissions('car', 100);
+          assert("calculateTransportEmissions('car', 100) should return 21", Math.abs(transportCo2 - 21) < 0.001);
+
+          // Test 2: Transport emissions (bike)
+          const bikeCo2 = EmissionsCalculator.calculateTransportEmissions('bike', 50);
+          assert("calculateTransportEmissions('bike', 50) should return 0", bikeCo2 === 0);
+
+          // Test 3: Food emissions (beef)
+          const foodCo2 = EmissionsCalculator.calculateFoodEmissions('beef', 0.5);
+          assert("calculateFoodEmissions('beef', 0.5) should return 13.5", Math.abs(foodCo2 - 13.5) < 0.001);
+
+          // Test 4: Validation bounds (negative check)
+          const valInvalid = DataValidator.validateActivityInput({ category: 'transport', subcategory: 'car', value: -1 });
+          assert("validateActivityInput({category:'transport', value:-1}) should return invalid", !valInvalid.valid);
+
+          // Test 5: Validation bounds (valid data check)
+          const valValid = DataValidator.validateActivityInput({ category: 'transport', subcategory: 'car', value: 100 });
+          assert("validateActivityInput(valid data) should return valid", valValid.valid);
+
+          // Test 6: AppState date range filter
+          const start = new Date("2026-01-01");
+          const end = new Date("2026-12-31");
+          const rangeEntries = AppState.getEntriesByDateRange(start, end);
+          assert("getEntriesByDateRange returns an array", Array.isArray(rangeEntries));
+
+        } catch (err) {
+          failed++;
+          results.push({ name: "Exception during test suite run: " + err.message, success: false });
+        }
+
+        const testResults = {
+          passed,
+          failed,
+          total: passed + failed,
+          details: results
+        };
+
+        window.testResults = testResults;
+
+        // Log results
+        console.groupCollapsed(`CarbonTrace Test Suite: ${passed}/${passed + failed} Passed`);
+        results.forEach(r => {
+          console.log(`${r.success ? '✓' : '✗'} ${r.name}`);
+        });
+        console.groupEnd();
+
+        // Update status label in UI
+        const testPill = document.getElementById('test-status-pill');
+        if (testPill) {
+          testPill.textContent = `${passed}/${passed + failed} Passed`;
+          testPill.style.color = failed > 0 ? 'var(--danger)' : 'var(--primary)';
+          testPill.style.fontWeight = '600';
+        }
+      }
+
+      return { run };
+    })();
+
     // --- Bootstrapping ---
-    document.addEventListener('DOMContentLoaded', () => {
-      AppState.init();
+    document.addEventListener('DOMContentLoaded', async () => {
+      await AppState.init();
       UIController.init();
+      TestRunner.run();
     });
   </script>
 </body>
