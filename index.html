@@ -618,6 +618,10 @@
   const SUPABASE_URL = "";
   const SUPABASE_KEY = "";
 
+  /**
+   * @constant {Object} EMISSION_FACTORS
+   * @description Immutable mapping of categories to specific subcategory emission multipliers (kg CO2 per unit).
+   */
   const EMISSION_FACTORS = Object.freeze({
     transport: Object.freeze({ car: 0.21, bus: 0.089, train: 0.041, flight: 0.255, bike: 0, walk: 0 }),
     food: Object.freeze({ beef: 27, chicken: 6.9, fish: 5.1, vegetables: 2.0, dairy: 3.2 }),
@@ -625,6 +629,10 @@
     shopping: Object.freeze({ electronics: 70, clothing: 15, furniture: 45 })
   });
 
+  /**
+   * @constant {Object} CATEGORY_COLORS
+   * @description Immutable mapping of categories to their designated hex color codes.
+   */
   const CATEGORY_COLORS = Object.freeze({
     transport: '#2D6A4F',
     food: '#E9C46A',
@@ -632,7 +640,15 @@
     shopping: '#52B788'
   });
 
+  /**
+   * @class ValidationError
+   * @extends Error
+   * @description Custom error class for handling specific activity validation failures.
+   */
   class ValidationError extends Error {
+    /**
+     * @param {string} message - The error description
+     */
     constructor(message) {
       super(message);
       this.name = "ValidationError";
@@ -642,9 +658,9 @@
   // --- 1. DataValidator ---
   const DataValidator = (function() {
     /**
-     * Sanitizes user input to prevent XSS
-     * @param {string} input - The input string
-     * @returns {string} Sanitized string
+     * Sanitizes user input to prevent XSS.
+     * @param {string|number|null|undefined} input - The input string to sanitize.
+     * @returns {string} Sanitized string safely escaped for HTML inclusion.
      */
     function sanitizeInput(input) {
       if (input === null || input === undefined) return '';
@@ -654,9 +670,9 @@
     }
 
     /**
-     * Validates activity form input
-     * @param {Object} formData
-     * @returns {Object} {valid: boolean, errors: string[]}
+     * Validates activity form input against logical rules and max thresholds.
+     * @param {Object} formData - Key-value pair object of form data.
+     * @returns {{valid: boolean, errors: string[]}} Validation result state and any associated error strings.
      */
     function validateActivityInput(formData) {
       const errors = [];
@@ -681,10 +697,11 @@
   // --- 2. EmissionsCalculator ---
   const EmissionsCalculator = (function() {
     /**
-     * @param {string} category 
-     * @param {string} subcategory 
-     * @param {number} value 
-     * @returns {number} CO2 in kg
+     * Calculates the raw emissions based on factors.
+     * @param {string} category - Primary category (e.g., 'transport')
+     * @param {string} subcategory - Subcategory (e.g., 'car')
+     * @param {number} value - The input magnitude (e.g., distance or weight)
+     * @returns {number} Calculated CO2 equivalent in kg
      */
     function calculateEmissions(category, subcategory, value) {
       if (!EMISSION_FACTORS[category] || EMISSION_FACTORS[category][subcategory] === undefined) return 0;
@@ -693,7 +710,19 @@
 
     return { 
       calculateEmissions,
+      /**
+       * Specialized transport calculator.
+       * @param {string} mode - The vehicle type
+       * @param {number} km - Distance in kilometers
+       * @returns {number} CO2 in kg
+       */
       calculateTransportEmissions: (mode, km) => calculateEmissions('transport', mode, km),
+      /**
+       * Specialized food calculator.
+       * @param {string} item - The food type
+       * @param {number} kg - Weight in kilograms
+       * @returns {number} CO2 in kg
+       */
       calculateFoodEmissions: (item, kg) => calculateEmissions('food', item, kg)
     };
   })();
@@ -704,6 +733,10 @@
     let adoptedInsights = [];
     let supabase = null;
 
+    /**
+     * Generates a crypto-secure UUID v4, falling back to Math.random if unavailable.
+     * @returns {string} The generated UUID.
+     */
     function generateUUID() {
       if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
       return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
@@ -712,6 +745,11 @@
       });
     }
 
+    /**
+     * Bootstraps the application state from LocalStorage and/or Supabase.
+     * @async
+     * @returns {Promise<void>}
+     */
     async function init() {
       const stored = localStorage.getItem('carbontrace_entries');
       if (stored) entries = JSON.parse(stored);
@@ -732,6 +770,11 @@
       document.dispatchEvent(new Event('stateChanged'));
     }
 
+    /**
+     * Fetches entries strictly from the connected Supabase cloud logic.
+     * @async
+     * @returns {Promise<void>}
+     */
     async function pullCloudData() {
       if (!supabase) return;
       const { data } = await supabase.from('carbontrace_entries').select('*').order('timestamp', { ascending: false });
@@ -739,6 +782,11 @@
       document.dispatchEvent(new Event('stateChanged'));
     }
 
+    /**
+     * Performs an upsert operation pushing local storage records up to the Supabase endpoint.
+     * @async
+     * @returns {Promise<void>}
+     */
     async function syncLocalToCloud() {
       if (!supabase) return;
       for (const entry of entries) {
@@ -746,12 +794,22 @@
       }
     }
 
+    /**
+     * Synchronously persists memory arrays to Window.localStorage.
+     * @returns {void}
+     */
     function saveLocally() {
       localStorage.setItem('carbontrace_entries', JSON.stringify(entries));
       localStorage.setItem('carbontrace_adopted_insights', JSON.stringify(adoptedInsights));
       document.dispatchEvent(new Event('stateChanged'));
     }
 
+    /**
+     * Computes the CO2 for an activity block and stores it safely locally and via Supabase.
+     * @async
+     * @param {Object} entryData - Contains category, subcategory, and amount keys.
+     * @returns {Promise<Object>} The final compiled entry.
+     */
     async function addEntry(entryData) {
       const co2 = EmissionsCalculator.calculateEmissions(entryData.category, entryData.subcategory, entryData.amount);
       const entry = {
@@ -768,12 +826,23 @@
       return entry;
     }
 
+    /**
+     * Destroys an entry block matching the targeted UUID.
+     * @async
+     * @param {string} id - The UUID string to target.
+     * @returns {Promise<void>}
+     */
     async function deleteEntry(id) {
       entries = entries.filter(e => e.id !== id);
       saveLocally();
       if (supabase) await supabase.from('carbontrace_entries').delete().eq('id', id);
     }
 
+    /**
+     * Destroys all stored local memory records and cloud records asynchronously.
+     * @async
+     * @returns {Promise<void>}
+     */
     async function clearAll() {
       entries = [];
       adoptedInsights = [];
@@ -781,14 +850,32 @@
       if (supabase) await supabase.from('carbontrace_entries').delete().neq('id', '0');
     }
 
+    /**
+     * Returns a cloned subset of entries to avoid pointer mutation issues.
+     * @returns {Array} List of stored entries
+     */
     function getEntries() { return [...entries]; }
+
+    /**
+     * Returns cloned insights to prevent state mutation.
+     * @returns {Array} List of adopted insights.
+     */
     function getAdoptedInsights() { return [...adoptedInsights]; }
     
+    /**
+     * Marks an insight as 'adopted' tracking the offset of carbon.
+     * @param {number} co2Saved - The estimated reduction in CO2 footprint.
+     * @returns {void}
+     */
     function addAdoptedInsight(co2Saved) {
       adoptedInsights.push({ id: generateUUID(), co2Saved, date: new Date().toISOString() });
       saveLocally();
     }
 
+    /**
+     * Triggers a browser native download exporting local state into a human-readable JSON payload.
+     * @returns {void}
+     */
     function exportData() {
       const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(entries, null, 2));
       const downloadAnchorNode = document.createElement('a');
@@ -799,7 +886,11 @@
       downloadAnchorNode.remove();
     }
 
-    // Explicit test overrides
+    /**
+     * Testing hook used exclusively by TestRunner mock state ingestion.
+     * @param {Array} mockEntries 
+     * @returns {void}
+     */
     function _setEntriesForTest(mockEntries) { entries = mockEntries; }
 
     return { init, addEntry, deleteEntry, getEntries, getAdoptedInsights, addAdoptedInsight, clearAll, exportData, _setEntriesForTest };
@@ -810,6 +901,10 @@
     let barChartCtx = null;
     let doughnutChartCtx = null;
 
+    /**
+     * Binds the Canvas Context instances to their targeted DOM nodes.
+     * @returns {void}
+     */
     function init() {
       const barCanvas = document.getElementById('barChart');
       const doughnutCanvas = document.getElementById('doughnutChart');
@@ -817,6 +912,11 @@
       if (doughnutCanvas) doughnutChartCtx = doughnutCanvas.getContext('2d');
     }
 
+    /**
+     * Paints all graphs inside a dedicated requestAnimationFrame stack.
+     * @param {Array} entries - Local records to render
+     * @returns {void}
+     */
     function render(entries) {
       requestAnimationFrame(() => {
         drawBarChart(entries);
@@ -824,6 +924,11 @@
       });
     }
 
+    /**
+     * Renders a 7-day chronological bar chart on the canvas payload.
+     * @param {Array} entries 
+     * @returns {void}
+     */
     function drawBarChart(entries) {
       if (!barChartCtx) return;
       const canvas = barChartCtx.canvas;
@@ -870,6 +975,11 @@
       });
     }
 
+    /**
+     * Renders an aggregated categorical split Doughnut Chart natively on canvas.
+     * @param {Array} entries 
+     * @returns {void}
+     */
     function drawDoughnutChart(entries) {
       if (!doughnutChartCtx) return;
       const canvas = doughnutChartCtx.canvas;
@@ -933,6 +1043,11 @@
 
   // --- 5. InsightsEngine ---
   const InsightsEngine = (function() {
+    /**
+     * Determines threshold-based actionable metrics and insight tasks.
+     * @param {Array} entries - Full log array to evaluate against
+     * @returns {Array} Derived insight objects.
+     */
     function generateInsights(entries) {
       const insights = [];
       const totals = { transport: 0, food: 0, energy: 0, shopping: 0 };
@@ -975,6 +1090,10 @@
     let currentPage = 1;
     const itemsPerPage = 10;
     
+    /**
+     * Orchestrates DOM listeners and UI painting upon successful App initialization.
+     * @returns {void}
+     */
     function init() {
       ChartRenderer.init();
       bindEvents();
@@ -982,6 +1101,10 @@
       window.addEventListener('resize', () => ChartRenderer.render(AppState.getEntries()));
     }
 
+    /**
+     * Wires DOM Event Listeners exclusively to static elements.
+     * @returns {void}
+     */
     function bindEvents() {
       document.querySelectorAll('.nav-btn').forEach(btn => {
         btn.addEventListener('click', (e) => {
@@ -1048,6 +1171,10 @@
       if (nextBtn) nextBtn.addEventListener('click', () => { currentPage++; renderLogTable(); });
     }
 
+    /**
+     * Broadcaster triggering all view repaints simultaneously.
+     * @returns {void}
+     */
     function renderAll() {
       renderDashboard();
       renderLogTable();
@@ -1055,6 +1182,10 @@
       ChartRenderer.render(AppState.getEntries());
     }
 
+    /**
+     * Injects temporal KPI metric strings into the Dashboard grid slots.
+     * @returns {void}
+     */
     function renderDashboard() {
       const entries = AppState.getEntries();
       const now = new Date();
@@ -1078,6 +1209,10 @@
       document.getElementById('dash-total').textContent = allTotal.toFixed(1) + ' kg';
     }
 
+    /**
+     * Efficiently paints the paginated Activity table rows via DocumentFragment processing.
+     * @returns {void}
+     */
     function renderLogTable() {
       const entries = AppState.getEntries();
       const totalPages = Math.ceil(entries.length / itemsPerPage) || 1;
@@ -1123,6 +1258,10 @@
       document.getElementById('next-page').disabled = currentPage === totalPages;
     }
 
+    /**
+     * Handles dynamic component creation for actionable user insights.
+     * @returns {void}
+     */
     function renderInsights() {
       const container = document.getElementById('insights-container');
       if (!container) return;
@@ -1190,11 +1329,20 @@
 
   // --- 7. TestRunner ---
   const TestRunner = (function() {
+    /**
+     * Test orchestrator tracking the health profile of logical core components.
+     * @returns {void}
+     */
     function run() {
       let passed = 0;
       let failed = 0;
       console.groupCollapsed("CarbonTrace Test Suite");
 
+      /**
+       * Core unit test truth evaluation assertion
+       * @param {boolean} condition - Boolean check
+       * @param {string} message - Pass/fail terminal logger readout
+       */
       function assert(condition, message) {
         if (condition) {
           console.log(`✓ ${message}`);
